@@ -292,14 +292,13 @@ class TelegramClient:
                     [button.model_dump(mode="json") for button in row] for row in message.buttons
                 ]
             }
-        payload = await self._post(
-            "sendMessage",
-            {
-                "chat_id": message.chat_id,
-                "text": message.text,
-                "reply_markup": reply_markup,
-            },
-        )
+        request_body: dict[str, Any] = {
+            "chat_id": message.chat_id,
+            "text": message.text,
+        }
+        if reply_markup is not None:
+            request_body["reply_markup"] = reply_markup
+        payload = await self._post("sendMessage", request_body)
         result = payload.get("result")
         if not isinstance(result, dict) or "message_id" not in result:
             raise TelegramDeliveryError("Telegram sendMessage returned no message_id.")
@@ -340,7 +339,7 @@ class TelegramClient:
         except httpx.HTTPError as error:
             raise TelegramDeliveryError(
                 f"Telegram {method} request failed ({type(error).__name__})."
-            ) from error
+            ) from None
         try:
             payload = response.json()
         except ValueError as error:

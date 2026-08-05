@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import traceback
+
 import httpx
 import pytest
 
@@ -35,3 +38,38 @@ async def test_telegram_http_failure_never_exposes_bot_token() -> None:
 
     assert bot_token not in str(captured.value)
     assert "HTTPStatusError" in str(captured.value)
+    rendered_traceback = "".join(traceback.format_exception(captured.value))
+    assert bot_token not in rendered_traceback
+
+
+@pytest.mark.asyncio
+async def test_telegram_omits_empty_reply_markup() -> None:
+    captured_json: dict[str, object] | None = None
+
+    def accept_request(request: httpx.Request) -> httpx.Response:
+        nonlocal captured_json
+        captured_json = json.loads(request.content)
+        return httpx.Response(
+            status_code=200,
+            request=request,
+            json={"ok": True, "result": {"message_id": 42}},
+        )
+
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        telegram_delivery_enabled=True,
+        telegram_bot_token="test-token",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(accept_request)) as http_client:
+        client = TelegramClient(settings, http_client)
+        message_id = await client.send(
+            OutboundMessage(
+                idempotency_key="empty-markup-test",
+                chat_id="12345",
+                text="message",
+            )
+        )
+
+    assert message_id == "42"
+    assert captured_json == {"chat_id": "12345", "text": "message"}
