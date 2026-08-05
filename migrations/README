@@ -1,0 +1,76 @@
+# Database migrations
+
+Alembic versions the four operational tables owned by this application. LangGraph
+checkpoint tables are managed separately by the selected checkpoint backend.
+
+The CLI reads migration paths and post-write hooks from `pyproject.toml`, logging
+configuration from `alembic.ini`, and the database URL from `DATABASE_URL`.
+Use an async SQLAlchemy URL such as `postgresql+psycopg://...` or
+`sqlite+aiosqlite:///...`.
+
+## Normal workflow
+
+```bash
+uv run alembic heads
+uv run alembic upgrade head
+uv run alembic current
+uv run alembic check
+```
+
+Create a revision only after changing `Base.metadata`:
+
+```bash
+uv run --extra dev alembic revision --autogenerate -m "describe the schema change"
+```
+
+The development extra supplies Ruff for the post-write lint and format hooks.
+
+Always review the generated operations, then verify both directions on a disposable
+database:
+
+```bash
+uv run alembic downgrade -1
+uv run alembic upgrade head
+```
+
+PostgreSQL uses JSONB for JSON documents. SQLite uses JSON and batch mode so it remains
+useful for local and migration tests.
+
+## Existing databases created with `create_all()`
+
+The base revision intentionally mirrors the old `create_all()` schema. Do not stamp
+blindly: first back up the database and verify that the four legacy tables, columns,
+indexes, and constraints match `e4d7a9136c84`. Then adopt the legacy schema and run the
+JSON-to-JSONB/index upgrade:
+
+```bash
+uv run alembic stamp e4d7a9136c84
+```
+
+Before upgrading PostgreSQL, validate every legacy value can be cast:
+
+```sql
+SELECT count(plan::jsonb) FROM daily_plans;
+SELECT count(payload::jsonb) FROM domain_events;
+SELECT count(payload::jsonb) FROM inbound_events;
+SELECT count(buttons::jsonb) FROM outbox;
+```
+
+Back up first. JSONB normalizes representation: duplicate object keys collapse to the
+last value, and whitespace/key order are not retained. Some JSON values that PostgreSQL
+accepted textually can also fail the stricter JSONB conversion; a failed revision rolls
+back transactionally. The type changes rewrite the PostgreSQL tables and take exclusive
+locks, so schedule a maintenance window for non-trivial legacy datasets.
+
+When the preflight succeeds, apply and verify the conversion:
+
+```bash
+uv run alembic upgrade head
+uv run alembic check
+```
+
+The second revision uses explicit `USING ...::jsonb` expressions. SQLite keeps JSON and
+receives only the new indexes.
+
+`Database.create_schema()` is intentionally limited to SQLite. PostgreSQL environments
+must be upgraded through Alembic.

@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "aiosqlite>=0.21,<1",
+    "alembic>=1.18,<2",
     "fastapi>=0.116,<1",
     "httpx>=0.28,<1",
     "langgraph>=1.0,<2",
@@ -57,3 +58,20 @@ ignore = ["RUF001"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
+
+[tool.alembic]
+script_location = "%(here)s/migrations"
+prepend_sys_path = ["."]
+output_encoding = "utf-8"
+
+[[tool.alembic.post_write_hooks]]
+name = "ruff-check"
+type = "module"
+module = "ruff"
+options = "check --fix REVISION_SCRIPT_FILENAME"
+
+[[tool.alembic.post_write_hooks]]
+name = "ruff-format"
+type = "module"
+module = "ruff"
+options = "format REVISION_SCRIPT_FILENAME"

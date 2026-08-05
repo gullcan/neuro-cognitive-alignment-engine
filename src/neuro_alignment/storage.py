@@ -13,12 +13,15 @@ from sqlalchemy import (
     JSON,
     Date,
     DateTime,
+    Index,
     Integer,
+    MetaData,
     String,
     Text,
     UniqueConstraint,
     select,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -35,13 +38,22 @@ from neuro_alignment.domain import (
     OutboundMessage,
 )
 
+NAMING_CONVENTION = {
+    "ix": "ix_%(table_name)s_%(column_0_N_name)s",
+    "uq": "uq_%(table_name)s_%(column_0_N_name)s",
+    "ck": "ck_%(table_name)s_%(column_0_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_N_name)s_%(referred_table_name)s",
+}
+
+JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
+
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
 class Base(DeclarativeBase):
-    pass
+    metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
 class InboundEventRecord(Base):
@@ -55,7 +67,7 @@ class InboundEventRecord(Base):
     source_event_id: Mapped[str] = mapped_column(String(160), nullable=False)
     event_type: Mapped[str] = mapped_column(String(80), nullable=False)
     user_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="processing", nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -66,6 +78,14 @@ class InboundEventRecord(Base):
 
 class DomainEventRecord(Base):
     __tablename__ = "domain_events"
+    __table_args__ = (
+        Index(
+            "ix_domain_events_user_task_occurred_at",
+            "user_id",
+            "task_id",
+            "occurred_at",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     event_type: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
@@ -75,7 +95,7 @@ class DomainEventRecord(Base):
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
-    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
@@ -83,19 +103,15 @@ class DomainEventRecord(Base):
 
 class DailyPlanRecord(Base):
     __tablename__ = "daily_plans"
-    __table_args__ = (
-        UniqueConstraint("user_id", "plan_date", name="uq_daily_plan_user_date"),
-    )
+    __table_args__ = (UniqueConstraint("user_id", "plan_date", name="uq_daily_plan_user_date"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     plan_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     thread_id: Mapped[str] = mapped_column(String(180), nullable=False)
-    approval_token: Mapped[str] = mapped_column(
-        String(24), nullable=False, unique=True, index=True
-    )
+    approval_token: Mapped[str] = mapped_column(String(24), nullable=False, unique=True, index=True)
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
-    plan: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    plan: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
@@ -106,6 +122,7 @@ class DailyPlanRecord(Base):
 
 class OutboxRecord(Base):
     __tablename__ = "outbox"
+    __table_args__ = (Index("ix_outbox_status_created_at", "status", "created_at"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     idempotency_key: Mapped[str] = mapped_column(
@@ -114,7 +131,7 @@ class OutboxRecord(Base):
     chat_id: Mapped[str] = mapped_column(String(100), nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     buttons: Mapped[list[list[dict[str, str]]]] = mapped_column(
-        JSON, default=list, nullable=False
+        JSON_DOCUMENT, default=list, nullable=False
     )
     status: Mapped[str] = mapped_column(String(20), default="pending", nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -143,10 +160,19 @@ class Database:
         )
 
     async def create_schema(self) -> None:
-        if self.engine.url.get_backend_name() == "sqlite":
-            database_path = self.engine.url.database
-            if database_path and database_path != ":memory:":
-                Path(database_path).parent.mkdir(parents=True, exist_ok=True)
+        """Create an ephemeral/local SQLite schema without Alembic.
+
+        PostgreSQL schemas are versioned exclusively through Alembic so application
+        startup cannot silently mask an unapplied migration.
+        """
+        if self.engine.url.get_backend_name() != "sqlite":
+            raise RuntimeError(
+                "Database.create_schema() only supports SQLite; "
+                "run `alembic upgrade head` for PostgreSQL."
+            )
+        database_path = self.engine.url.database
+        if database_path and database_path != ":memory:":
+            Path(database_path).parent.mkdir(parents=True, exist_ok=True)
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
 

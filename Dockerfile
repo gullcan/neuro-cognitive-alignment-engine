@@ -10,6 +10,9 @@ COPY src ./src
 
 RUN pip install --no-cache-dir .
 
+COPY alembic.ini ./
+COPY migrations ./migrations
+
 RUN useradd --create-home --uid 10001 appuser \
     && mkdir -p /app/data \
     && chown -R appuser:appuser /app

@@ -34,6 +34,18 @@ The system is not a generic reminder bot and does not provide medical diagnosis 
 
 The project is currently in the foundation and infrastructure phase.
 
+## Database migrations
+
+Operational PostgreSQL schemas are managed with Alembic:
+
+```bash
+uv run alembic upgrade head
+uv run alembic check
+```
+
+See [`migrations/README`](migrations/README) for revision, rollback, SQLite testing, and
+existing-database baseline guidance.
+
 ## Safety Boundary
 
 Behavioral observations, user reports, statistical patterns, model hypotheses, and general neuroscience explanations are treated as separate evidence levels. Model-generated hypotheses must never be stored or presented as measured biological facts.
