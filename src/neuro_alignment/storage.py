@@ -19,6 +19,8 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    and_,
+    or_,
     select,
     text,
 )
@@ -525,23 +527,77 @@ class OutboxRepository:
             for row in rows
         ]
 
+    async def claim_delivery_batch(
+        self,
+        *,
+        limit: int,
+        max_attempts: int,
+        lease_seconds: int,
+    ) -> list[tuple[str, OutboundMessage]]:
+        """Lease pending messages so concurrent workers cannot intentionally double-send."""
+        now = utc_now()
+        stale_before = now - timedelta(seconds=lease_seconds)
+        statement = (
+            select(OutboxRecord)
+            .where(
+                OutboxRecord.attempts < max_attempts,
+                or_(
+                    OutboxRecord.status.in_(("pending", "failed")),
+                    and_(
+                        OutboxRecord.status == "sending",
+                        OutboxRecord.updated_at < stale_before,
+                    ),
+                ),
+            )
+            .order_by(OutboxRecord.created_at)
+            .limit(limit)
+        )
+        if self.database.engine.dialect.name == "postgresql":
+            statement = statement.with_for_update(skip_locked=True)
+
+        async with self.database.session() as session, session.begin():
+            rows = (await session.scalars(statement)).all()
+            messages: list[tuple[str, OutboundMessage]] = []
+            for row in rows:
+                row.status = "sending"
+                row.attempts += 1
+                row.updated_at = now
+                messages.append(
+                    (
+                        row.id,
+                        OutboundMessage(
+                            idempotency_key=row.idempotency_key,
+                            chat_id=row.chat_id,
+                            text=row.text,
+                            buttons=row.buttons,
+                        ),
+                    )
+                )
+        return messages
+
     async def mark_sent(self, record_id: str, provider_message_id: str) -> None:
         async with self.database.session() as session, session.begin():
             record = await session.get(OutboxRecord, record_id)
             if record is None:
                 raise LookupError(record_id)
             record.status = "sent"
-            record.attempts += 1
             record.provider_message_id = provider_message_id
             record.last_error = None
             record.updated_at = utc_now()
 
-    async def mark_failed(self, record_id: str, error: Exception) -> None:
+    async def mark_failed(
+        self,
+        record_id: str,
+        error: Exception,
+        *,
+        max_attempts: int,
+    ) -> bool:
         async with self.database.session() as session, session.begin():
             record = await session.get(OutboxRecord, record_id)
             if record is None:
                 raise LookupError(record_id)
-            record.status = "failed"
-            record.attempts += 1
+            exhausted = record.attempts >= max_attempts
+            record.status = "dead" if exhausted else "failed"
             record.last_error = str(error)[:2000]
             record.updated_at = utc_now()
+        return exhausted

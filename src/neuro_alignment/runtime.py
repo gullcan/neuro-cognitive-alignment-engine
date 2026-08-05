@@ -7,6 +7,7 @@ import httpx
 from neuro_alignment import __version__
 from neuro_alignment.checkpointing import CheckpointManager
 from neuro_alignment.config import Settings
+from neuro_alignment.delivery import OutboxDispatcher
 from neuro_alignment.integrations import (
     NotionClient,
     TelegramClient,
@@ -45,6 +46,7 @@ class AppServices:
     intelligence: IntelligenceProvider
     checkpoints: CheckpointManager | None = None
     workflow: WorkflowEngine | None = None
+    dispatcher: OutboxDispatcher | None = None
 
     @classmethod
     def build(cls, settings: Settings) -> AppServices:
@@ -90,6 +92,11 @@ class AppServices:
             ),
             checkpointer,
         )
+        self.dispatcher = OutboxDispatcher(
+            self.settings,
+            self.outbox,
+            self.telegram,
+        )
 
     @property
     def workflow_ready(self) -> bool:
@@ -97,6 +104,7 @@ class AppServices:
             self.workflow is not None
             and self.checkpoints is not None
             and self.checkpoints.is_started
+            and self.dispatcher is not None
         )
 
     async def close(self) -> None:
@@ -106,6 +114,7 @@ class AppServices:
                 await self.checkpoints.close()
         finally:
             self.workflow = None
+            self.dispatcher = None
             self.checkpoints = None
             try:
                 await self.http_client.aclose()

@@ -32,8 +32,8 @@ The system is not a generic reminder bot and does not provide medical diagnosis 
 
 ## Development Status
 
-The operational database, FastAPI runtime, and first stateful LangGraph workflow are
-implemented. External webhook endpoints and outbox delivery are the next runtime layer.
+The operational database, FastAPI runtime, stateful LangGraph workflow, authenticated
+Telegram ingress, scheduler trigger, and leased outbox delivery are implemented.
 
 ## LangGraph Runtime
 
@@ -90,6 +90,22 @@ Deployment probes use separate endpoints:
 
 - `GET /health/live` checks that the API process is running.
 - `GET /health/ready` verifies both graph initialization and database connectivity.
+
+Runtime entry points are deliberately separated by trust boundary:
+
+- `POST /v1/webhooks/telegram` requires Telegram's
+  `X-Telegram-Bot-Api-Secret-Token` header and validates the configured chat.
+- `POST /v1/internal/scheduler/daily-plan` requires `X-Internal-Api-Key` and creates
+  an idempotent daily planning event.
+- `POST /v1/internal/outbox/deliver` requires `X-Internal-Api-Key` and delivers one
+  leased Telegram batch.
+
+When Telegram delivery is enabled, workflow requests attempt an outbox delivery after
+processing. Failed records are retried up to `OUTBOX_MAX_ATTEMPTS`, and then moved to the
+`dead` state. PostgreSQL workers use row locking with `SKIP LOCKED`; a delivery lease also
+recovers records left in `sending` by a stopped worker. Telegram does not expose a message
+idempotency key, so delivery is intentionally at-least-once across a crash exactly between
+the provider accepting a message and the local sent marker being committed.
 
 ## Safety Boundary
 

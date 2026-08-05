@@ -30,6 +30,10 @@ class NotionSchemaError(RuntimeError):
     pass
 
 
+class TelegramDeliveryError(RuntimeError):
+    """A sanitized Telegram failure that never includes the bot-token URL."""
+
+
 class NotionClient:
     REQUIRED_PROPERTIES: ClassVar[set[str]] = {
         "Task",
@@ -281,7 +285,6 @@ class TelegramClient:
         if not self.settings.telegram_bot_token:
             raise IntegrationConfigurationError("TELEGRAM_BOT_TOKEN is required.")
 
-        token = self.settings.telegram_bot_token.get_secret_value()
         reply_markup: dict[str, Any] | None = None
         if message.buttons:
             reply_markup = {
@@ -289,19 +292,64 @@ class TelegramClient:
                     [button.model_dump(mode="json") for button in row] for row in message.buttons
                 ]
             }
-        response = await self.http_client.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={
+        payload = await self._post(
+            "sendMessage",
+            {
                 "chat_id": message.chat_id,
                 "text": message.text,
                 "reply_markup": reply_markup,
             },
         )
-        response.raise_for_status()
-        payload = response.json()
-        if not payload.get("ok"):
-            raise RuntimeError(f"Telegram rejected message: {payload}")
-        return str(payload["result"]["message_id"])
+        result = payload.get("result")
+        if not isinstance(result, dict) or "message_id" not in result:
+            raise TelegramDeliveryError("Telegram sendMessage returned no message_id.")
+        return str(result["message_id"])
+
+    async def answer_callback_query(
+        self,
+        callback_query_id: str,
+        *,
+        text: str = "İşleniyor…",
+    ) -> None:
+        """Stop Telegram's inline-button progress indicator promptly."""
+        if not self.settings.telegram_delivery_enabled:
+            await logger.ainfo(
+                "telegram_callback_answer_skipped",
+                callback_query_id=callback_query_id,
+            )
+            return
+        await self._post(
+            "answerCallbackQuery",
+            {
+                "callback_query_id": callback_query_id,
+                "text": text[:200],
+                "show_alert": False,
+            },
+        )
+
+    async def _post(self, method: str, json_body: dict[str, Any]) -> dict[str, Any]:
+        if not self.settings.telegram_bot_token:
+            raise IntegrationConfigurationError("TELEGRAM_BOT_TOKEN is required.")
+        token = self.settings.telegram_bot_token.get_secret_value()
+        try:
+            response = await self.http_client.post(
+                f"https://api.telegram.org/bot{token}/{method}",
+                json=json_body,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            raise TelegramDeliveryError(
+                f"Telegram {method} request failed ({type(error).__name__})."
+            ) from error
+        try:
+            payload = response.json()
+        except ValueError as error:
+            raise TelegramDeliveryError(
+                f"Telegram {method} returned an invalid response."
+            ) from error
+        if not isinstance(payload, dict) or not payload.get("ok"):
+            raise TelegramDeliveryError(f"Telegram rejected {method}.")
+        return payload
 
 
 def verify_notion_signature(

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,6 +42,10 @@ class Settings(BaseSettings):
     telegram_chat_id: str | None = None
     telegram_delivery_enabled: bool = False
 
+    outbox_batch_size: int = Field(default=20, ge=1, le=100)
+    outbox_max_attempts: int = Field(default=5, ge=1, le=20)
+    outbox_lease_seconds: int = Field(default=120, ge=10, le=3600)
+
     openai_api_key: SecretStr | None = None
     openai_model: str = "gpt-5.6-terra"
 
@@ -51,6 +56,48 @@ class Settings(BaseSettings):
     def validate_timezone(cls, value: str) -> str:
         ZoneInfo(value)
         return value
+
+    @field_validator("telegram_webhook_secret")
+    @classmethod
+    def validate_telegram_webhook_secret(
+        cls,
+        value: SecretStr | None,
+    ) -> SecretStr | None:
+        if value is None:
+            return None
+        secret = value.get_secret_value()
+        if not 1 <= len(secret) <= 256 or re.fullmatch(r"[A-Za-z0-9_-]+", secret) is None:
+            raise ValueError(
+                "TELEGRAM_WEBHOOK_SECRET must contain 1-256 letters, digits, "
+                "underscores, or hyphens."
+            )
+        return value
+
+    @field_validator(
+        "notion_api_token",
+        "notion_verification_token",
+        "telegram_bot_token",
+        "telegram_webhook_secret",
+        "openai_api_key",
+        mode="before",
+    )
+    @classmethod
+    def normalize_empty_secret(cls, value: object) -> object:
+        return None if value == "" else value
+
+    @model_validator(mode="after")
+    def validate_production_safety(self) -> Settings:
+        if self.app_env != "production":
+            return self
+        if self.checkpoint_backend != "postgres":
+            raise ValueError("Production requires CHECKPOINT_BACKEND=postgres.")
+        if self.internal_api_key.get_secret_value() == "change-me":
+            raise ValueError("Production requires a non-default INTERNAL_API_KEY.")
+        if self.telegram_delivery_enabled and not self.telegram_bot_token:
+            raise ValueError("Telegram delivery requires TELEGRAM_BOT_TOKEN.")
+        if self.telegram_bot_token and not self.telegram_webhook_secret:
+            raise ValueError("Telegram webhooks require TELEGRAM_WEBHOOK_SECRET.")
+        return self
 
     @property
     def tz(self) -> ZoneInfo:

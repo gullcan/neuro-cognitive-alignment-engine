@@ -83,6 +83,10 @@ class UnsafeFeedbackError(RuntimeError):
     """Raised when generated feedback fails the bounded safety review twice."""
 
 
+class WorkflowInputError(ValueError):
+    """A permanent event-contract error that a transport must not retry."""
+
+
 class WorkflowEngine:
     """Compile and execute the event-driven neuro-alignment state machine."""
 
@@ -298,10 +302,12 @@ class WorkflowEngine:
         event = self._event(state)
         action = event.action
         if action not in {TaskAction.PLAN_APPROVED, TaskAction.PLAN_REJECTED}:
-            raise ValueError("Plan decision route requires an approval or rejection action.")
+            raise WorkflowInputError(
+                "Plan decision route requires an approval or rejection action."
+            )
         approval_token = str(event.payload.get("approval_token", ""))
         if not approval_token:
-            raise ValueError("Plan decision is missing approval_token.")
+            raise WorkflowInputError("Plan decision is missing approval_token.")
         resolved = await self.dependencies.plans.plan_by_approval_token(
             event.user_id,
             approval_token,
@@ -311,7 +317,9 @@ class WorkflowEngine:
         _plan_thread_id, plan_date, current_status = resolved
         status = "approved" if action == TaskAction.PLAN_APPROVED else "rejected"
         if current_status not in {"pending", status}:
-            raise ValueError(f"Plan is already {current_status}; it cannot be changed to {status}.")
+            raise WorkflowInputError(
+                f"Plan is already {current_status}; it cannot be changed to {status}."
+            )
         await self.dependencies.events.append_domain_event(
             event_type=ACTION_TO_DOMAIN_EVENT[action].value,
             user_id=event.user_id,
@@ -353,9 +361,9 @@ class WorkflowEngine:
     async def _record_behavior(self, state: WorkflowState) -> StateUpdate:
         event = self._event(state)
         if event.action is None or event.action not in ACTION_TO_DOMAIN_EVENT:
-            raise ValueError("Behavior route requires a supported task action.")
+            raise WorkflowInputError("Behavior route requires a supported task action.")
         if event.task_id is None:
-            raise ValueError("Behavior route requires task_id.")
+            raise WorkflowInputError("Behavior route requires task_id.")
         await self.dependencies.events.append_domain_event(
             event_type=ACTION_TO_DOMAIN_EVENT[event.action].value,
             user_id=event.user_id,
@@ -373,7 +381,7 @@ class WorkflowEngine:
     async def _retrieve_evidence(self, state: WorkflowState) -> StateUpdate:
         event = self._event(state)
         if event.task_id is None:
-            raise ValueError("Evidence retrieval requires task_id.")
+            raise WorkflowInputError("Evidence retrieval requires task_id.")
         evidence = await self.dependencies.events.build_evidence(
             user_id=event.user_id,
             task_id=event.task_id,
@@ -507,7 +515,7 @@ class WorkflowEngine:
                 return "plan_decision"
             if event.action in ACTION_TO_DOMAIN_EVENT:
                 return "behavior"
-        raise ValueError(f"Unsupported event/action combination: {event.event_type}")
+        raise WorkflowInputError(f"Unsupported event/action combination: {event.event_type}")
 
     def _plan_date(self, event: NormalizedInboundEvent) -> date:
         raw_date = event.payload.get("plan_date")
