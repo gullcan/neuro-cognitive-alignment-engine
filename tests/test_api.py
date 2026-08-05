@@ -21,6 +21,7 @@ async def test_health_endpoints_and_lifespan(tmp_path: Path) -> None:
     async with application.router.lifespan_context(application):
         services = application.state.services
         assert isinstance(services.intelligence, RuleBasedIntelligenceProvider)
+        assert services.workflow_ready
         assert not services.http_client.is_closed
 
         async with build_client(application) as client:
@@ -36,7 +37,10 @@ async def test_health_endpoints_and_lifespan(tmp_path: Path) -> None:
 
             ready_response = await client.get("/health/ready")
             assert ready_response.status_code == 200
-            assert ready_response.json()["checks"] == {"database": "ok"}
+            assert ready_response.json()["checks"] == {
+                "database": "ok",
+                "workflow": "ok",
+            }
 
     assert services.http_client.is_closed
     assert not hasattr(application.state, "services")
@@ -65,7 +69,7 @@ async def test_readiness_returns_503_without_leaking_error(
         "service": "neuro-cognitive-alignment-engine",
         "version": "0.1.0",
         "environment": "test",
-        "checks": {"database": "unavailable"},
+        "checks": {"database": "unavailable", "workflow": "ok"},
     }
     assert "sensitive" not in response.text
 
@@ -96,5 +100,6 @@ def build_test_settings(tmp_path: Path) -> Settings:
         _env_file=None,
         app_env="test",
         database_url=f"sqlite+aiosqlite:///{tmp_path / 'api.db'}",
+        checkpoint_backend="memory",
         openai_api_key=None,
     )

@@ -32,7 +32,36 @@ The system is not a generic reminder bot and does not provide medical diagnosis 
 
 ## Development Status
 
-The project is currently in the foundation and infrastructure phase.
+The operational database, FastAPI runtime, and first stateful LangGraph workflow are
+implemented. External webhook endpoints and outbox delivery are the next runtime layer.
+
+## LangGraph Runtime
+
+The graph uses deterministic routing for control flow and reserves the language model for
+planning and evidence-bounded feedback generation. Its current branches are:
+
+```text
+claim inbound event
+├── daily plan -> Notion -> Planner Agent -> persist plan -> Telegram outbox
+├── plan decision -> approve/reject persisted plan -> Telegram outbox
+├── task behavior -> record event -> retrieve evidence -> Neuro-Behavioral Agent
+│                    -> Safety Critic -> Telegram outbox
+└── check-in -> record self-report
+```
+
+Every branch finishes by marking the inbound event complete. Repeated source events are
+stopped at the claim node, making downstream writes idempotent. The Safety Critic permits
+one model revision and fails closed if unsupported biological or clinical claims remain.
+
+LangGraph checkpoints and behavioral memory serve different purposes:
+
+- Checkpoints persist graph execution state and recovery history per `thread_id`.
+- Operational events persist observed behavior used to construct evidence.
+- Semantic long-term memory will later retrieve similar episodes across threads.
+
+Checkpoint backends are selected with `CHECKPOINT_BACKEND`: `memory` for tests, `sqlite`
+for local experiments, and `postgres` for the durable runtime. PostgreSQL checkpoint tables
+are managed by LangGraph and intentionally remain outside Alembic's operational schema.
 
 ## Database migrations
 
@@ -60,7 +89,7 @@ The interactive OpenAPI interface is available at `http://localhost:8000/docs`.
 Deployment probes use separate endpoints:
 
 - `GET /health/live` checks that the API process is running.
-- `GET /health/ready` verifies that PostgreSQL accepts a query.
+- `GET /health/ready` verifies both graph initialization and database connectivity.
 
 ## Safety Boundary
 

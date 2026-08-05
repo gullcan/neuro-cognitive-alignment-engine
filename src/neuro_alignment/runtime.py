@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import httpx
 
 from neuro_alignment import __version__
+from neuro_alignment.checkpointing import CheckpointManager
 from neuro_alignment.config import Settings
 from neuro_alignment.integrations import (
     NotionClient,
@@ -22,6 +23,10 @@ from neuro_alignment.storage import (
     OutboxRepository,
     PlanRepository,
 )
+from neuro_alignment.workflow import (
+    WorkflowDependencies,
+    WorkflowEngine,
+)
 
 
 @dataclass(slots=True)
@@ -38,6 +43,8 @@ class AppServices:
     telegram: TelegramClient
     telegram_updates: TelegramUpdateParser
     intelligence: IntelligenceProvider
+    checkpoints: CheckpointManager | None = None
+    workflow: WorkflowEngine | None = None
 
     @classmethod
     def build(cls, settings: Settings) -> AppServices:
@@ -65,9 +72,42 @@ class AppServices:
             intelligence=intelligence,
         )
 
+    async def start(self) -> None:
+        """Start persistence resources and compile the application graph once."""
+        if self.workflow is not None:
+            return
+        checkpoints = CheckpointManager(self.settings)
+        self.checkpoints = checkpoints
+        checkpointer = await checkpoints.start()
+        self.workflow = WorkflowEngine(
+            WorkflowDependencies(
+                settings=self.settings,
+                events=self.events,
+                plans=self.plans,
+                outbox=self.outbox,
+                notion=self.notion,
+                intelligence=self.intelligence,
+            ),
+            checkpointer,
+        )
+
+    @property
+    def workflow_ready(self) -> bool:
+        return bool(
+            self.workflow is not None
+            and self.checkpoints is not None
+            and self.checkpoints.is_started
+        )
+
     async def close(self) -> None:
-        """Release outbound HTTP and database resources even during shutdown errors."""
+        """Release graph, outbound HTTP, and database resources during shutdown."""
         try:
-            await self.http_client.aclose()
+            if self.checkpoints is not None:
+                await self.checkpoints.close()
         finally:
-            await self.database.close()
+            self.workflow = None
+            self.checkpoints = None
+            try:
+                await self.http_client.aclose()
+            finally:
+                await self.database.close()

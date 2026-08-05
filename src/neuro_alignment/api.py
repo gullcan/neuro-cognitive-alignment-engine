@@ -54,17 +54,20 @@ def create_app(
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         services = service_builder(configured_settings)
-        application.state.services = services
-        await logger.ainfo(
-            "application_started",
-            environment=configured_settings.app_env,
-            version=__version__,
-        )
         try:
+            await services.start()
+            application.state.services = services
+            await logger.ainfo(
+                "application_started",
+                environment=configured_settings.app_env,
+                version=__version__,
+                checkpoint_backend=configured_settings.checkpoint_backend,
+            )
             yield
         finally:
             await services.close()
-            del application.state.services
+            if hasattr(application.state, "services"):
+                del application.state.services
             await logger.ainfo("application_stopped")
 
     application = FastAPI(
@@ -103,6 +106,13 @@ def create_app(
         summary="Dependency readiness",
     )
     async def readiness(response: Response, services: Services) -> HealthResponse:
+        if not services.workflow_ready:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+            return HealthResponse(
+                status="not_ready",
+                environment=configured_settings.app_env,
+                checks={"database": "unknown", "workflow": "unavailable"},
+            )
         try:
             async with asyncio.timeout(configured_settings.readiness_timeout_seconds):
                 await services.database.ping()
@@ -116,13 +126,13 @@ def create_app(
             return HealthResponse(
                 status="not_ready",
                 environment=configured_settings.app_env,
-                checks={"database": "unavailable"},
+                checks={"database": "unavailable", "workflow": "ok"},
             )
 
         return HealthResponse(
             status="ok",
             environment=configured_settings.app_env,
-            checks={"database": "ok"},
+            checks={"database": "ok", "workflow": "ok"},
         )
 
     return application

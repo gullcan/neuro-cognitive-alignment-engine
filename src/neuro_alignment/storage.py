@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from sqlalchemy import (
     JSON,
@@ -269,9 +269,16 @@ class EventRepository:
         source: str,
         occurred_at: datetime,
         payload: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
     ) -> str:
-        event_id = str(uuid4())
+        event_id = (
+            str(uuid5(NAMESPACE_URL, f"neuro-alignment:{idempotency_key}"))
+            if idempotency_key
+            else str(uuid4())
+        )
         async with self.database.session() as session, session.begin():
+            if idempotency_key and await session.get(DomainEventRecord, event_id) is not None:
+                return event_id
             session.add(
                 DomainEventRecord(
                     id=event_id,
@@ -444,6 +451,23 @@ class PlanRepository:
         if record is None:
             return None
         return record.thread_id, record.plan_date
+
+    async def plan_by_approval_token(
+        self,
+        user_id: str,
+        approval_token: str,
+    ) -> tuple[str, date, str] | None:
+        """Resolve a plan decision even after a retry has already changed its status."""
+        async with self.database.session() as session:
+            record = await session.scalar(
+                select(DailyPlanRecord).where(
+                    DailyPlanRecord.user_id == user_id,
+                    DailyPlanRecord.approval_token == approval_token,
+                )
+            )
+        if record is None:
+            return None
+        return record.thread_id, record.plan_date, record.status
 
 
 class OutboxRepository:
