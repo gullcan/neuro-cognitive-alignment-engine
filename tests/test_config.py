@@ -29,6 +29,23 @@ def test_telegram_webhook_secret_rejects_unsupported_characters() -> None:
         )
 
 
+def test_render_postgres_url_uses_async_psycopg_dialect() -> None:
+    settings = Settings(
+        _env_file=None,
+        database_url="postgresql://user:password@database:5432/app",
+    )
+
+    assert settings.database_url == "postgresql+psycopg://user:password@database:5432/app"
+
+
+def test_explicit_sqlalchemy_database_driver_is_preserved() -> None:
+    database_url = "postgresql+psycopg://user:password@database:5432/app"
+
+    settings = Settings(_env_file=None, database_url=database_url)
+
+    assert settings.database_url == database_url
+
+
 def test_production_rejects_non_durable_checkpoint_backend() -> None:
     with pytest.raises(ValidationError, match="CHECKPOINT_BACKEND=postgres"):
         Settings(

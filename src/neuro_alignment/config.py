@@ -57,6 +57,14 @@ class Settings(BaseSettings):
         ZoneInfo(value)
         return value
 
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def normalize_database_url(cls, value: object) -> object:
+        """Select psycopg's async SQLAlchemy dialect for platform Postgres URLs."""
+        if isinstance(value, str) and value.startswith("postgresql://"):
+            return value.replace("postgresql://", "postgresql+psycopg://", 1)
+        return value
+
     @field_validator("telegram_webhook_secret")
     @classmethod
     def validate_telegram_webhook_secret(

@@ -28,6 +28,7 @@ WORKDIR /app
 
 COPY --from=builder /app/.venv /app/.venv
 
+COPY pyproject.toml ./
 COPY alembic.ini ./
 COPY migrations ./migrations
 

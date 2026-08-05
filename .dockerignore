@@ -1,7 +1,10 @@
 .git
 .gitignore
+.github
 .venv
 .env
+.env.*
+!.env.example
 .pytest_cache
 .mypy_cache
 .ruff_cache
@@ -11,3 +14,6 @@ __pycache__
 .coverage
 htmlcov
 data
+tests
+docs
+render.yaml

@@ -107,6 +107,15 @@ recovers records left in `sending` by a stopped worker. Telegram does not expose
 idempotency key, so delivery is intentionally at-least-once across a crash exactly between
 the provider accepting a message and the local sent marker being committed.
 
+## Production deployment
+
+The repository includes a Render Blueprint for an always-on Docker web service and a
+private managed PostgreSQL database. It runs Alembic before each release, uses PostgreSQL
+for durable LangGraph checkpoints, and verifies readiness before routing traffic.
+
+See [`docs/deployment/render.md`](docs/deployment/render.md) for the dashboard flow,
+secret-handling boundary, cost warning, and Telegram activation gate.
+
 ## Safety Boundary
 
 Behavioral observations, user reports, statistical patterns, model hypotheses, and general neuroscience explanations are treated as separate evidence levels. Model-generated hypotheses must never be stored or presented as measured biological facts.

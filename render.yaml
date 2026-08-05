@@ -1,0 +1,63 @@
+services:
+  - type: web
+    name: neuro-cognitive-alignment-engine
+    runtime: docker
+    repo: https://github.com/gullcan/neuro-cognitive-alignment-engine.git
+    branch: main
+    region: frankfurt
+    plan: starter
+    autoDeployTrigger: commit
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: >-
+      /bin/sh -c 'exec uvicorn neuro_alignment.api:app
+      --host 0.0.0.0 --port "${PORT:-10000}"'
+    preDeployCommand: alembic upgrade head
+    healthCheckPath: /health/ready
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: READINESS_TIMEOUT_SECONDS
+        value: "5"
+      - key: TIMEZONE
+        value: Europe/Istanbul
+      - key: DEFAULT_USER_ID
+        value: owner
+      - key: DATABASE_URL
+        fromDatabase:
+          name: neuro-alignment-postgres
+          property: connectionString
+      - key: CHECKPOINT_BACKEND
+        value: postgres
+      - key: CHECKPOINT_POSTGRES_URL
+        fromDatabase:
+          name: neuro-alignment-postgres
+          property: connectionString
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: TELEGRAM_DELIVERY_ENABLED
+        value: "true"
+      - key: OUTBOX_BATCH_SIZE
+        value: "20"
+      - key: OUTBOX_MAX_ATTEMPTS
+        value: "5"
+      - key: OUTBOX_LEASE_SECONDS
+        value: "120"
+      - key: INTERNAL_API_KEY
+        generateValue: true
+
+databases:
+  - name: neuro-alignment-postgres
+    region: frankfurt
+    plan: basic-256mb
+    postgresMajorVersion: "17"
+    databaseName: neuro_alignment
+    user: neuro_alignment
+    ipAllowList: []
