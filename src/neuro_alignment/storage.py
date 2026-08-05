@@ -20,6 +20,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     select,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import (
@@ -178,6 +179,11 @@ class Database:
 
     async def close(self) -> None:
         await self.engine.dispose()
+
+    async def ping(self) -> None:
+        """Verify that the database accepts and executes a trivial query."""
+        async with self.engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
 
     @asynccontextmanager
     async def session(self) -> AsyncIterator[AsyncSession]:

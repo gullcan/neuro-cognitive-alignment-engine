@@ -46,6 +46,22 @@ uv run alembic check
 See [`migrations/README`](migrations/README) for revision, rollback, SQLite testing, and
 existing-database baseline guidance.
 
+## Local API
+
+Start PostgreSQL, apply migrations, and run the API:
+
+```bash
+docker compose up -d postgres
+uv run alembic upgrade head
+uv run neuro-alignment
+```
+
+The interactive OpenAPI interface is available at `http://localhost:8000/docs`.
+Deployment probes use separate endpoints:
+
+- `GET /health/live` checks that the API process is running.
+- `GET /health/ready` verifies that PostgreSQL accepts a query.
+
 ## Safety Boundary
 
 Behavioral observations, user reports, statistical patterns, model hypotheses, and general neuroscience explanations are treated as separate evidence levels. Model-generated hypotheses must never be stored or presented as measured biological facts.
