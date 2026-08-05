@@ -1,50 +1,68 @@
-# Render Production Deployment
+# Free Render and Neon Deployment
 
-The first production topology consists of one always-on Docker web service and one
-managed PostgreSQL instance in Render's Frankfurt region. Render terminates TLS at the
-edge and supplies the public HTTPS endpoint required by Telegram webhooks.
+The zero-cost portfolio topology consists of one Render Free Docker web service and one
+Neon Free PostgreSQL project. Render supplies the public HTTPS endpoint required by
+Telegram, while Neon keeps operational data and LangGraph checkpoints outside Render's
+ephemeral filesystem.
 
-## Provisioned resources
+No payment card is required for the selected free plans at the time this guide was
+written. Always review both providers' current plan screens before creating resources.
 
-`render.yaml` provisions:
+## Accepted constraints
 
-- a Starter web service built from the repository's pinned Docker image;
-- a Basic 256 MB PostgreSQL 17 database with public database access disabled;
-- a private database connection shared by the operational SQLAlchemy store and the
-  LangGraph PostgreSQL checkpointer;
-- an Alembic pre-deploy command that must succeed before a new release starts;
-- a readiness health check that verifies the database and compiled graph;
-- generated internal API credentials and dashboard-provided Telegram secrets.
+- Render suspends the web service after an idle period. The first Telegram update after
+  suspension can take about a minute to wake the service and might be retried by Telegram.
+- Neon suspends idle compute and wakes it on the next database connection.
+- Render's pre-deploy command is not available to free web services. The single-instance
+  container therefore runs the idempotent `alembic upgrade head` command before Uvicorn.
+- This topology has no uptime SLA, high-availability guarantee, private network, or
+  always-on background worker.
+- Automated daily planning is deferred. Telegram-triggered workflows and durable history
+  remain available after the service wakes.
 
-These are paid, always-on resources. The selected plans avoid webhook cold starts and the
-expiration behavior of a free PostgreSQL database. Confirm the current price shown by
-Render before applying the Blueprint.
+These are deployment-tier constraints, not changes to the LangGraph architecture. A later
+paid deployment can restore always-on execution and move migrations back to a dedicated
+pre-deploy phase without changing the domain model.
 
-## Initial dashboard flow
+## 1. Create the Neon database
 
-1. Sign in to Render with the GitHub account that can access
-   `gullcan/neuro-cognitive-alignment-engine`.
-2. Open **New > Blueprint** and select that repository.
-3. Render detects `render.yaml`. Review the Frankfurt region and the two selected plans.
-4. Supply the three prompted values from the local `.env` file:
-   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, and `TELEGRAM_CHAT_ID`.
-5. Apply the Blueprint and wait until the database and web service are both available.
+1. Create a Neon account and keep the **Free** plan selected.
+2. Create a project named `neuro-cognitive-alignment-engine`.
+3. Select an AWS European region close to Render Frankfurt when offered.
+4. In the project dashboard, click **Connect**.
+5. Disable connection pooling and copy the direct PostgreSQL connection string. Direct
+   connections are required because the container runs schema migrations at startup.
+6. Treat this connection string as a password. Do not paste it into chat or commit it.
+
+The application automatically converts Neon's standard `postgresql://` URL to SQLAlchemy's
+async psycopg dialect. LangGraph reuses the same PostgreSQL secret for checkpoints, so the
+Render form asks for the database URL only once.
+
+## 2. Apply the Render Blueprint
+
+1. Sign in to Render and open **New > Blueprint**.
+2. Select `gullcan/neuro-cognitive-alignment-engine`.
+3. Confirm that the web service plan is **Free** and that no Render database is listed.
+4. Supply the four prompted values:
+   - `DATABASE_URL`: the direct Neon connection string;
+   - `TELEGRAM_BOT_TOKEN`: from the local `.env` file;
+   - `TELEGRAM_WEBHOOK_SECRET`: from the local `.env` file;
+   - `TELEGRAM_CHAT_ID`: from the local `.env` file.
+5. Apply the Blueprint and wait for the deploy to finish.
 6. Open the service URL ending in `/health/ready`. Continue only when it returns
-   `"status": "ok"` with both database and workflow checks set to `"ok"`.
+   `"status": "ok"` and both checks are `"ok"`.
 
-Never paste `.env` as a whole into Render. It contains local-only settings that would
-override the production-safe values declared by the Blueprint.
+Never import the local `.env` file as a whole. Local SQLite and development values would
+override the Blueprint's production-safe configuration.
 
-## Telegram activation boundary
+## 3. Telegram activation boundary
 
-Creating the web service does not register a Telegram webhook. Registration is a separate
-controlled step after the readiness check succeeds. Register the HTTPS URL
-`/v1/webhooks/telegram` with Telegram's secret-token header and drop any stale pending
-updates. Verify Telegram's `getWebhookInfo` response before sending a live test update.
+Creating the service does not register the Telegram webhook. Register
+`https://<service>.onrender.com/v1/webhooks/telegram` only after readiness succeeds. Use
+the configured secret-token header, drop stale pending updates, and verify
+`getWebhookInfo` before sending the first live update.
 
-## Later integrations
+## Deferred integrations
 
-Notion and OpenAI credentials are intentionally not part of the first deployment gate.
-Add them from the Render service's **Environment** page only after the Telegram ingress,
-database durability, and observability checks pass. This keeps deployment failures
-isolated to one integration boundary at a time.
+Add Notion and OpenAI credentials later from Render's **Environment** page. Keeping them
+outside the first deployment isolates failures to the database and Telegram boundaries.

@@ -53,7 +53,7 @@ async def test_postgres_checkpoint_requires_explicit_connection_string() -> None
         )
     )
 
-    with pytest.raises(ValueError, match="CHECKPOINT_POSTGRES_URL"):
+    with pytest.raises(ValueError, match="CHECKPOINT_POSTGRES_URL or a PostgreSQL DATABASE_URL"):
         await manager.start()
 
     await manager.close()

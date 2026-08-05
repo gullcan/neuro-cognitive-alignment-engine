@@ -42,10 +42,11 @@ class CheckpointManager:
             await sqlite_saver.setup()
             saver = sqlite_saver
         else:
-            connection_string = self.settings.checkpoint_postgres_url
+            connection_string = self.settings.postgres_checkpoint_url
             if not connection_string:
                 raise ValueError(
-                    "CHECKPOINT_POSTGRES_URL is required when CHECKPOINT_BACKEND=postgres."
+                    "CHECKPOINT_POSTGRES_URL or a PostgreSQL DATABASE_URL is required "
+                    "when CHECKPOINT_BACKEND=postgres."
                 )
             postgres_saver = await self._exit_stack.enter_async_context(
                 AsyncPostgresSaver.from_conn_string(connection_string)

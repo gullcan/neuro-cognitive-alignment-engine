@@ -5,14 +5,14 @@ services:
     repo: https://github.com/gullcan/neuro-cognitive-alignment-engine.git
     branch: main
     region: frankfurt
-    plan: starter
+    plan: free
     autoDeployTrigger: commit
     dockerfilePath: ./Dockerfile
     dockerContext: .
     dockerCommand: >-
-      /bin/sh -c 'exec uvicorn neuro_alignment.api:app
+      /bin/sh -c 'alembic upgrade head &&
+      exec uvicorn neuro_alignment.api:app
       --host 0.0.0.0 --port "${PORT:-10000}"'
-    preDeployCommand: alembic upgrade head
     healthCheckPath: /health/ready
     maxShutdownDelaySeconds: 30
     envVars:
@@ -27,15 +27,9 @@ services:
       - key: DEFAULT_USER_ID
         value: owner
       - key: DATABASE_URL
-        fromDatabase:
-          name: neuro-alignment-postgres
-          property: connectionString
+        sync: false
       - key: CHECKPOINT_BACKEND
         value: postgres
-      - key: CHECKPOINT_POSTGRES_URL
-        fromDatabase:
-          name: neuro-alignment-postgres
-          property: connectionString
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
@@ -52,12 +46,3 @@ services:
         value: "120"
       - key: INTERNAL_API_KEY
         generateValue: true
-
-databases:
-  - name: neuro-alignment-postgres
-    region: frankfurt
-    plan: basic-256mb
-    postgresMajorVersion: "17"
-    databaseName: neuro_alignment
-    user: neuro_alignment
-    ipAllowList: []

@@ -46,6 +46,31 @@ def test_explicit_sqlalchemy_database_driver_is_preserved() -> None:
     assert settings.database_url == database_url
 
 
+def test_postgres_checkpoint_url_falls_back_to_operational_database() -> None:
+    settings = Settings(
+        _env_file=None,
+        database_url="postgresql://user:password@database:5432/app?sslmode=require",
+        checkpoint_backend="postgres",
+    )
+
+    assert settings.postgres_checkpoint_url == (
+        "postgresql://user:password@database:5432/app?sslmode=require"
+    )
+
+
+def test_explicit_checkpoint_url_takes_precedence() -> None:
+    settings = Settings(
+        _env_file=None,
+        database_url="postgresql://user:password@database:5432/app",
+        checkpoint_backend="postgres",
+        checkpoint_postgres_url="postgresql://checkpoint:password@database:5432/checkpoints",
+    )
+
+    assert settings.postgres_checkpoint_url == (
+        "postgresql://checkpoint:password@database:5432/checkpoints"
+    )
+
+
 def test_production_rejects_non_durable_checkpoint_backend() -> None:
     with pytest.raises(ValidationError, match="CHECKPOINT_BACKEND=postgres"):
         Settings(

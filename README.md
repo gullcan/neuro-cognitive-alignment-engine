@@ -109,12 +109,14 @@ the provider accepting a message and the local sent marker being committed.
 
 ## Production deployment
 
-The repository includes a Render Blueprint for an always-on Docker web service and a
-private managed PostgreSQL database. It runs Alembic before each release, uses PostgreSQL
-for durable LangGraph checkpoints, and verifies readiness before routing traffic.
+The repository includes a zero-cost portfolio Blueprint using a Render Free Docker web
+service and Neon Free PostgreSQL. The database persists operational events and durable
+LangGraph checkpoints outside Render's ephemeral filesystem. Because free Render services
+do not support pre-deploy commands, the single-instance container applies idempotent
+Alembic migrations before starting the API.
 
 See [`docs/deployment/render.md`](docs/deployment/render.md) for the dashboard flow,
-secret-handling boundary, cost warning, and Telegram activation gate.
+free-tier constraints, secret-handling boundary, and Telegram activation gate.
 
 ## Safety Boundary
 

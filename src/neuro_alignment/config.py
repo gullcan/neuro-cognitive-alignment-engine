@@ -63,6 +63,8 @@ class Settings(BaseSettings):
         """Select psycopg's async SQLAlchemy dialect for platform Postgres URLs."""
         if isinstance(value, str) and value.startswith("postgresql://"):
             return value.replace("postgresql://", "postgresql+psycopg://", 1)
+        if isinstance(value, str) and value.startswith("postgres://"):
+            return value.replace("postgres://", "postgresql+psycopg://", 1)
         return value
 
     @field_validator("telegram_webhook_secret")
@@ -99,6 +101,10 @@ class Settings(BaseSettings):
             return self
         if self.checkpoint_backend != "postgres":
             raise ValueError("Production requires CHECKPOINT_BACKEND=postgres.")
+        if self.postgres_checkpoint_url is None:
+            raise ValueError(
+                "Production requires CHECKPOINT_POSTGRES_URL or a PostgreSQL DATABASE_URL."
+            )
         if self.internal_api_key.get_secret_value() == "change-me":
             raise ValueError("Production requires a non-default INTERNAL_API_KEY.")
         if self.telegram_delivery_enabled and not self.telegram_bot_token:
@@ -118,6 +124,20 @@ class Settings(BaseSettings):
     @property
     def telegram_configured(self) -> bool:
         return bool(self.telegram_bot_token and self.telegram_chat_id)
+
+    @property
+    def postgres_checkpoint_url(self) -> str | None:
+        """Return psycopg-compatible checkpoint connection information.
+
+        A dedicated URL remains supported, but small deployments can safely reuse the
+        operational PostgreSQL database without duplicating one secret in the platform UI.
+        """
+        connection_string = self.checkpoint_postgres_url
+        if connection_string is None and self.database_url.startswith("postgresql+psycopg://"):
+            connection_string = self.database_url
+        if connection_string is None:
+            return None
+        return connection_string.replace("postgresql+psycopg://", "postgresql://", 1)
 
 
 @lru_cache
