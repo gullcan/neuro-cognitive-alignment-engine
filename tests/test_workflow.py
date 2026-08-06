@@ -124,6 +124,29 @@ async def test_plan_approval_follows_its_own_deterministic_branch(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_text_checkin_is_recorded_and_receives_evidence_bounded_response(
+    tmp_path: Path,
+) -> None:
+    async with build_runtime(tmp_path, tasks=[]) as runtime:
+        event = make_event(
+            event_id="telegram-checkin-1",
+            event_type=InboundEventType.TELEGRAM_MESSAGE,
+            source=EventSource.TELEGRAM,
+            payload={"chat_id": "12345"},
+        ).model_copy(update={"text": "enerji 7, odak 8"})
+
+        result = await runtime.engine.process(event)
+
+        assert result.status == "checkin_recorded"
+        assert result.queued_messages == 1
+        pending = await runtime.outbox.pending()
+        assert len(pending) == 1
+        assert pending[0][1].chat_id == "12345"
+        assert "CHECK-IN KAYDEDİLDİ" in pending[0][1].text
+        assert "henüz davranış kanıtı değildir" in pending[0][1].text
+
+
+@pytest.mark.asyncio
 async def test_behavior_feedback_uses_evidence_and_keeps_threads_isolated(
     tmp_path: Path,
 ) -> None:

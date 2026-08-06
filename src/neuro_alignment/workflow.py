@@ -170,6 +170,7 @@ class WorkflowEngine:
         builder.add_node("queue_feedback", self._queue_feedback)
 
         builder.add_node("record_checkin", self._record_checkin)
+        builder.add_node("queue_checkin_response", self._queue_checkin_response)
         builder.add_node("complete_event", self._complete_event)
 
         builder.add_edge(START, "claim_event")
@@ -205,7 +206,8 @@ class WorkflowEngine:
         )
         builder.add_edge("queue_feedback", "complete_event")
 
-        builder.add_edge("record_checkin", "complete_event")
+        builder.add_edge("record_checkin", "queue_checkin_response")
+        builder.add_edge("queue_checkin_response", "complete_event")
         builder.add_edge("complete_event", END)
         return builder.compile(
             checkpointer=checkpointer,
@@ -496,6 +498,30 @@ class WorkflowEngine:
             idempotency_key=f"{event.source.value}:{event.event_id}:checkin",
         )
         return {"status": "checkin_recorded"}
+
+    async def _queue_checkin_response(self, state: WorkflowState) -> StateUpdate:
+        event = self._event(state)
+        chat_id = self._chat_id(event)
+        if not chat_id:
+            return {"queued_messages": 0}
+
+        queued = await self.dependencies.outbox.enqueue(
+            [
+                OutboundMessage(
+                    idempotency_key=f"checkin-response:{event.event_id}",
+                    chat_id=chat_id,
+                    text=(
+                        "CHECK-IN KAYDEDİLDİ\n\n"
+                        "Bu bildirim bir niyet beyanıdır; henüz davranış kanıtı değildir. "
+                        "Söz-eylem tutarlılığı, planlanan görevin başlatılması ve "
+                        "tamamlanmasıyla ölçülecek.\n\n"
+                        "Şimdi seçtiğin görevin minimum eylemini başlat ve sonucu "
+                        "görev düğmesiyle bildir."
+                    ),
+                )
+            ]
+        )
+        return {"queued_messages": queued}
 
     async def _complete_event(self, state: WorkflowState) -> StateUpdate:
         await self.dependencies.events.complete_inbound(self._event(state))

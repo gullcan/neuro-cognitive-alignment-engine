@@ -85,6 +85,7 @@ async def test_telegram_webhook_authenticates_processes_and_deduplicates(
         )
         assert first.status_code == 200
         assert first.json()["status"] == "checkin_recorded"
+        assert first.json()["queued_messages"] == 1
         assert first.json()["delivery"]["enabled"] is False
 
         duplicate = await client.post(
