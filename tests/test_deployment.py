@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -29,6 +30,8 @@ def test_start_runs_migrations_before_replacing_process(monkeypatch: pytest.Monk
 
     migration_config = upgrade.call_args.args[0]
     assert isinstance(migration_config, Config)
+    script_location = migration_config.get_main_option("script_location")
+    assert Path(script_location).resolve() == Path("migrations").resolve()
     assert upgrade.call_args.args[1] == "head"
     execvp.assert_called_once_with(
         "uvicorn",
