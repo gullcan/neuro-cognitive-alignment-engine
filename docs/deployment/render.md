@@ -15,6 +15,8 @@ written. Always review both providers' current plan screens before creating reso
 - Neon suspends idle compute and wakes it on the next database connection.
 - Render's pre-deploy command is not available to free web services. The single-instance
   container therefore runs the idempotent `alembic upgrade head` command before Uvicorn.
+- Render's configurable shutdown delay is not available on the Free plan, so the service
+  uses the platform's free-tier shutdown behavior.
 - This topology has no uptime SLA, high-availability guarantee, private network, or
   always-on background worker.
 - Automated daily planning is deferred. Telegram-triggered workflows and durable history

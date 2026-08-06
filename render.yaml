@@ -14,7 +14,6 @@ services:
       exec uvicorn neuro_alignment.api:app
       --host 0.0.0.0 --port "${PORT:-10000}"'
     healthCheckPath: /health/ready
-    maxShutdownDelaySeconds: 30
     envVars:
       - key: APP_ENV
         value: production
