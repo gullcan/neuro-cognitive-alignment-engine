@@ -33,6 +33,7 @@ dev = [
 
 [project.scripts]
 neuro-alignment = "neuro_alignment.api:run"
+neuro-alignment-start = "neuro_alignment.deployment:start"
 
 [build-system]
 requires = ["hatchling"]

@@ -14,7 +14,8 @@ written. Always review both providers' current plan screens before creating reso
   suspension can take about a minute to wake the service and might be retried by Telegram.
 - Neon suspends idle compute and wakes it on the next database connection.
 - Render's pre-deploy command is not available to free web services. The single-instance
-  container therefore runs the idempotent `alembic upgrade head` command before Uvicorn.
+  container therefore uses a tested Python entrypoint that applies the idempotent Alembic
+  upgrade before replacing itself with Uvicorn.
 - Render's configurable shutdown delay is not available on the Free plan, so the service
   uses the platform's free-tier shutdown behavior.
 - This topology has no uptime SLA, high-availability guarantee, private network, or
