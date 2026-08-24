@@ -5,6 +5,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
 
 from neuro_alignment.domain import (
     DailyPlanItem,
@@ -31,6 +33,18 @@ def test_behavior_context_vector_is_explainable_normalized_and_deterministic() -
     assert first_context["action"] == "blocked"
     assert first_context["commitment_tier"] == "Core"
     assert first_context["priority"] == "P1"
+
+
+def test_postgres_similarity_query_uses_explicit_vector_cosine_operator() -> None:
+    vector = [0.0] * BEHAVIOR_VECTOR_DIMENSIONS
+    vector[0] = 1.0
+
+    distance = MemoryRepository._postgres_cosine_distance(vector)
+    statement = select(distance)
+    compiled = str(statement.compile(dialect=postgresql.dialect()))
+
+    assert "behavioral_memories.embedding <=>" in compiled
+    assert "::JSON" not in compiled
 
 
 @pytest.mark.asyncio

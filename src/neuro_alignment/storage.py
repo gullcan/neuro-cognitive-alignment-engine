@@ -14,6 +14,7 @@ from sqlalchemy import (
     JSON,
     Date,
     DateTime,
+    Float,
     Index,
     Integer,
     MetaData,
@@ -21,6 +22,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     and_,
+    literal,
     or_,
     select,
     text,
@@ -450,7 +452,7 @@ class MemoryRepository:
         limit: int = 5,
     ) -> list[SimilarBehaviorEpisode]:
         if self.database.engine.url.get_backend_name() == "postgresql":
-            distance = cast(Any, BehaviorMemoryRecord.embedding).cosine_distance(embedding)
+            distance = self._postgres_cosine_distance(embedding)
             async with self.database.session() as session:
                 rows = (
                     await session.execute(
@@ -486,6 +488,15 @@ class MemoryRepository:
             reverse=True,
         )[:limit]
         return [self._episode(record, similarity) for record, similarity in ranked]
+
+    @staticmethod
+    def _postgres_cosine_distance(embedding: list[float]) -> Any:
+        """Use an explicitly typed pgvector operand with the cosine operator."""
+        query_vector = literal(embedding, type_=Vector(BEHAVIOR_VECTOR_DIMENSIONS))
+        return cast(Any, BehaviorMemoryRecord.embedding).op(
+            "<=>",
+            return_type=Float(),
+        )(query_vector)
 
     @staticmethod
     def _episode(
