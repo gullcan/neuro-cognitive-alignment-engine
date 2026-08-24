@@ -192,6 +192,7 @@ class TelegramUpdateParser:
                 payload={
                     "callback_query_id": callback.get("id"),
                     "chat_id": chat_id,
+                    "message_id": callback.get("message", {}).get("message_id"),
                     "telegram_user_id": callback.get("from", {}).get("id"),
                     **metadata,
                 },
@@ -312,6 +313,24 @@ class TelegramClient:
                 "callback_query_id": callback_query_id,
                 "text": text[:200],
                 "show_alert": False,
+            },
+        )
+
+    async def clear_inline_keyboard(self, chat_id: str, message_id: int) -> None:
+        """Remove a consumed decision keyboard while preserving the message text."""
+        if not self.settings.telegram_delivery_enabled:
+            await logger.ainfo(
+                "telegram_keyboard_clear_skipped",
+                chat_id=chat_id,
+                message_id=message_id,
+            )
+            return
+        await self._post(
+            "editMessageReplyMarkup",
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "reply_markup": {"inline_keyboard": []},
             },
         )
 

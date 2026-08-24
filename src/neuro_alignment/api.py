@@ -20,6 +20,7 @@ from neuro_alignment.domain import (
     InboundEventType,
     NormalizedInboundEvent,
     ProcessResult,
+    TaskAction,
 )
 from neuro_alignment.integrations import (
     IntegrationConfigurationError,
@@ -238,7 +239,11 @@ def create_app(
             ) from error
 
         callback_query_id = event.payload.get("callback_query_id")
-        if callback_query_id:
+        is_plan_decision = event.action in {
+            TaskAction.PLAN_APPROVED,
+            TaskAction.PLAN_REJECTED,
+        }
+        if callback_query_id and not is_plan_decision:
             try:
                 await services.telegram.answer_callback_query(str(callback_query_id))
             except Exception as error:
@@ -249,15 +254,40 @@ def create_app(
                 )
 
         try:
-            return await process_and_deliver(event, services)
+            result = await process_and_deliver(event, services)
         except (LookupError, WorkflowInputError):
             # Invalid or already-opposed plan decisions are permanent input errors;
             # returning 2xx prevents Telegram from retrying the same callback forever.
-            return EventProcessingResponse(
+            result = EventProcessingResponse(
                 status="rejected",
                 event_id=event.event_id,
                 thread_id=services.workflow.thread_id_for(event) if services.workflow else None,
             )
+        if callback_query_id and is_plan_decision:
+            callback_text = plan_callback_text(result)
+            try:
+                await services.telegram.answer_callback_query(
+                    str(callback_query_id),
+                    text=callback_text,
+                )
+            except Exception as error:
+                await logger.awarning(
+                    "telegram_callback_answer_failed",
+                    event_id=event.event_id,
+                    error_type=type(error).__name__,
+                )
+            message_id = event.payload.get("message_id")
+            chat_id = event.payload.get("chat_id")
+            if isinstance(message_id, int) and chat_id:
+                try:
+                    await services.telegram.clear_inline_keyboard(str(chat_id), message_id)
+                except Exception as error:
+                    await logger.awarning(
+                        "telegram_keyboard_clear_failed",
+                        event_id=event.event_id,
+                        error_type=type(error).__name__,
+                    )
+        return result
 
     @application.post(
         "/v1/internal/scheduler/daily-plan",
@@ -332,6 +362,18 @@ def require_internal_api_key(received: str | None, settings: Settings) -> None:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid internal API key.",
         )
+
+
+def plan_callback_text(result: EventProcessingResponse) -> str:
+    if result.status == "rejected":
+        return "Bu plan kararı artık değiştirilemez."
+    if result.status == "plan_approved":
+        return "Plan onaylandı." if result.queued_messages else "Bu plan zaten onaylandı."
+    if result.status == "plan_rejected":
+        return "Plan reddedildi." if result.queued_messages else "Bu plan zaten reddedildi."
+    if result.status == "duplicate":
+        return "Bu işlem daha önce işlendi."
+    return "Plan kararı işlendi."
 
 
 app = create_app()

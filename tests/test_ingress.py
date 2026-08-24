@@ -26,7 +26,8 @@ class StubNotionClient:
 class StubTelegramClient:
     def __init__(self) -> None:
         self.sent: list[OutboundMessage] = []
-        self.answered_callbacks: list[str] = []
+        self.answered_callbacks: list[tuple[str, str]] = []
+        self.cleared_keyboards: list[tuple[str, int]] = []
 
     async def send(self, message: OutboundMessage) -> str:
         self.sent.append(message)
@@ -38,7 +39,10 @@ class StubTelegramClient:
         *,
         text: str = "İşleniyor…",
     ) -> None:
-        self.answered_callbacks.append(callback_query_id)
+        self.answered_callbacks.append((callback_query_id, text))
+
+    async def clear_inline_keyboard(self, chat_id: str, message_id: int) -> None:
+        self.cleared_keyboards.append((chat_id, message_id))
 
 
 @pytest.mark.asyncio
@@ -130,8 +134,66 @@ async def test_telegram_task_callback_queues_feedback_and_acks_button(
         assert response.status_code == 200
         assert response.json()["status"] == "feedback_generated"
         assert response.json()["queued_messages"] == 1
-        assert telegram.answered_callbacks == ["callback-7002"]
+        assert telegram.answered_callbacks == [("callback-7002", "İşleniyor…")]
         assert len(await services.outbox.pending()) == 1
+
+
+@pytest.mark.asyncio
+async def test_plan_callback_explains_stale_decision_and_clears_keyboard(
+    tmp_path: Path,
+) -> None:
+    settings = build_settings(tmp_path)
+    services = await build_services(settings)
+    services.notion = StubNotionClient(
+        [
+            NotionTask(
+                page_id="notion-plan-task",
+                title="Plan düğmesini tüket",
+                scheduled_date=date(2026, 8, 5),
+                commitment_tier="Core",
+                priority="P1",
+                definition_of_done="Klavye kaldırıldı",
+                minimum_action="Planı onayla",
+            )
+        ]
+    )  # type: ignore[assignment]
+    telegram = StubTelegramClient()
+    services.telegram = telegram  # type: ignore[assignment]
+    application = create_app(settings=settings, service_builder=lambda _settings: services)
+
+    async with (
+        application.router.lifespan_context(application),
+        build_client(application) as client,
+    ):
+        plan_response = await client.post(
+            "/v1/internal/scheduler/daily-plan",
+            json={"plan_date": "2026-08-05", "request_id": "plan-callback-test"},
+            headers={"X-Internal-Api-Key": "internal-secret"},
+        )
+        assert plan_response.status_code == 200
+        plan_message = (await services.outbox.pending())[0][1]
+        callback_data = plan_message.buttons[0][0].callback_data
+
+        first = await client.post(
+            "/v1/webhooks/telegram",
+            json=_plan_callback_update(7003, "callback-7003", 91, callback_data),
+            headers={"X-Telegram-Bot-Api-Secret-Token": "telegram-secret"},
+        )
+        stale = await client.post(
+            "/v1/webhooks/telegram",
+            json=_plan_callback_update(7004, "callback-7004", 92, callback_data),
+            headers={"X-Telegram-Bot-Api-Secret-Token": "telegram-secret"},
+        )
+
+    assert first.json()["status"] == "plan_approved"
+    assert first.json()["queued_messages"] == 2
+    assert stale.json()["status"] == "plan_approved"
+    assert stale.json()["queued_messages"] == 0
+    assert telegram.answered_callbacks[-2:] == [
+        ("callback-7003", "Plan onaylandı."),
+        ("callback-7004", "Bu plan zaten onaylandı."),
+    ]
+    assert telegram.cleared_keyboards == [("12345", 91), ("12345", 92)]
 
 
 @pytest.mark.asyncio
@@ -214,6 +276,23 @@ async def test_internal_outbox_endpoint_delivers_with_leased_worker(tmp_path: Pa
         }
         assert len(telegram.sent) == 1
         assert await services.outbox.pending() == []
+
+
+def _plan_callback_update(
+    update_id: int,
+    callback_id: str,
+    message_id: int,
+    callback_data: str,
+) -> dict[str, object]:
+    return {
+        "update_id": update_id,
+        "callback_query": {
+            "id": callback_id,
+            "from": {"id": 88},
+            "message": {"message_id": message_id, "chat": {"id": 12345}},
+            "data": callback_data,
+        },
+    }
 
 
 async def build_services(settings: Settings) -> AppServices:
