@@ -28,7 +28,13 @@ from neuro_alignment.domain import (
     TaskAction,
 )
 from neuro_alignment.intelligence import IntelligenceProvider
-from neuro_alignment.storage import EventRepository, OutboxRepository, PlanRepository
+from neuro_alignment.memory import build_behavior_context
+from neuro_alignment.storage import (
+    EventRepository,
+    MemoryRepository,
+    OutboxRepository,
+    PlanRepository,
+)
 
 logger = structlog.get_logger()
 
@@ -48,6 +54,8 @@ class WorkflowState(TypedDict):
     plan: dict[str, Any] | None
     approval_token: str | None
     evidence: dict[str, Any] | None
+    behavior_context: dict[str, Any] | None
+    behavior_vector: list[float]
     task_title: str | None
     feedback: dict[str, Any] | None
     critique: dict[str, Any] | None
@@ -74,6 +82,7 @@ class CommitmentSource(Protocol):
 class WorkflowDependencies:
     settings: Settings
     events: EventRepository
+    memory: MemoryRepository
     plans: PlanRepository
     outbox: OutboxRepository
     notion: CommitmentSource
@@ -436,7 +445,28 @@ class WorkflowEngine:
             },
             idempotency_key=f"{event.source.value}:{event.event_id}:task-action",
         )
-        return {}
+        item = await self.dependencies.plans.task_item(event.user_id, event.task_id)
+        task_title = item.title if item else str(event.payload.get("task_title") or event.task_id)
+        context, vector = build_behavior_context(
+            event,
+            item,
+            self.dependencies.settings.tz,
+        )
+        await self.dependencies.memory.store_episode(
+            source_event_id=event.event_id,
+            user_id=event.user_id,
+            task_id=event.task_id,
+            task_title=task_title,
+            action=event.action,
+            occurred_at=event.occurred_at,
+            context=context,
+            embedding=vector,
+        )
+        return {
+            "behavior_context": context,
+            "behavior_vector": vector,
+            "task_title": task_title,
+        }
 
     async def _retrieve_evidence(self, state: WorkflowState) -> StateUpdate:
         event = self._event(state)
@@ -446,15 +476,21 @@ class WorkflowEngine:
             user_id=event.user_id,
             task_id=event.task_id,
         )
-        task_title = await self.dependencies.plans.task_title(
-            event.user_id,
-            event.task_id,
+        similar = await self.dependencies.memory.similar_episodes(
+            user_id=event.user_id,
+            embedding=state["behavior_vector"],
+            exclude_source_event_id=event.event_id,
         )
-        if task_title is None:
-            task_title = str(event.payload.get("task_title") or event.task_id)
+        evidence = evidence.model_copy(
+            update={
+                "similar_episodes": similar,
+                "evidence_refs": evidence.evidence_refs
+                + [episode.memory_id for episode in similar],
+                "has_sufficient_history": evidence.has_sufficient_history or len(similar) >= 3,
+            }
+        )
         return {
             "evidence": evidence.model_dump(mode="json"),
-            "task_title": task_title,
         }
 
     async def _neuro_behavioral_agent(self, state: WorkflowState) -> StateUpdate:
@@ -630,6 +666,8 @@ class WorkflowEngine:
             plan=None,
             approval_token=None,
             evidence=None,
+            behavior_context=None,
+            behavior_vector=[],
             task_title=None,
             feedback=None,
             critique=None,

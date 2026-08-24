@@ -1,6 +1,6 @@
 # Database migrations
 
-Alembic versions the four operational tables owned by this application. LangGraph
+Alembic versions the five operational tables owned by this application. LangGraph
 checkpoint tables are managed separately by the selected checkpoint backend.
 
 The CLI reads migration paths and post-write hooks from `pyproject.toml`, logging
@@ -35,6 +35,11 @@ uv run alembic upgrade head
 
 PostgreSQL uses JSONB for JSON documents. SQLite uses JSON and batch mode so it remains
 useful for local and migration tests.
+
+The behavioral-memory revision enables Neon's `vector` extension, stores normalized
+32-dimensional planning-context vectors, and creates an HNSW cosine index. SQLite stores
+the same vectors as JSON and uses exact in-process cosine ranking in tests. Downgrade
+removes the application table but deliberately retains the shared PostgreSQL extension.
 
 ## Existing databases created with `create_all()`
 

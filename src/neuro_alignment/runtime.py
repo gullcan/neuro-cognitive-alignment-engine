@@ -21,6 +21,7 @@ from neuro_alignment.intelligence import (
 from neuro_alignment.storage import (
     Database,
     EventRepository,
+    MemoryRepository,
     OutboxRepository,
     PlanRepository,
 )
@@ -38,6 +39,7 @@ class AppServices:
     database: Database
     http_client: httpx.AsyncClient
     events: EventRepository
+    memory: MemoryRepository
     plans: PlanRepository
     outbox: OutboxRepository
     notion: NotionClient
@@ -66,6 +68,7 @@ class AppServices:
             database=database,
             http_client=http_client,
             events=EventRepository(database),
+            memory=MemoryRepository(database),
             plans=PlanRepository(database),
             outbox=OutboxRepository(database),
             notion=NotionClient(settings, http_client),
@@ -85,6 +88,7 @@ class AppServices:
             WorkflowDependencies(
                 settings=self.settings,
                 events=self.events,
+                memory=self.memory,
                 plans=self.plans,
                 outbox=self.outbox,
                 notion=self.notion,

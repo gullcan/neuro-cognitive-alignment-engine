@@ -6,9 +6,10 @@ from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     Date,
@@ -36,10 +37,14 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from neuro_alignment.domain import (
     BehaviorEvidence,
     DailyPlan,
+    DailyPlanItem,
     EvidenceEvent,
     NormalizedInboundEvent,
     OutboundMessage,
+    SimilarBehaviorEpisode,
+    TaskAction,
 )
+from neuro_alignment.memory import BEHAVIOR_VECTOR_DIMENSIONS, cosine_similarity
 
 NAMING_CONVENTION = {
     "ix": "ix_%(table_name)s_%(column_0_N_name)s",
@@ -49,6 +54,7 @@ NAMING_CONVENTION = {
 }
 
 JSON_DOCUMENT = JSON().with_variant(JSONB(), "postgresql")
+BEHAVIOR_VECTOR = JSON().with_variant(Vector(BEHAVIOR_VECTOR_DIMENSIONS), "postgresql")
 
 
 def utc_now() -> datetime:
@@ -144,6 +150,34 @@ class OutboxRecord(Base):
         DateTime(timezone=True), default=utc_now, nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
+class BehaviorMemoryRecord(Base):
+    __tablename__ = "behavioral_memories"
+    __table_args__ = (
+        Index("ix_behavioral_memories_user_occurred_at", "user_id", "occurred_at"),
+        Index(
+            "ix_behavioral_memories_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ).ddl_if(dialect="postgresql"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_event_id: Mapped[str] = mapped_column(String(160), nullable=False, unique=True)
+    user_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    task_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    task_title: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    context: Mapped[dict[str, Any]] = mapped_column(JSON_DOCUMENT, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(BEHAVIOR_VECTOR, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
 
@@ -365,6 +399,110 @@ class EventRepository:
         return value.astimezone(UTC)
 
 
+class MemoryRepository:
+    """Persist and retrieve cross-task behavioral episodes using context vectors."""
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    async def store_episode(
+        self,
+        *,
+        source_event_id: str,
+        user_id: str,
+        task_id: str,
+        task_title: str,
+        action: TaskAction,
+        occurred_at: datetime,
+        context: dict[str, Any],
+        embedding: list[float],
+    ) -> str:
+        memory_id = str(uuid5(NAMESPACE_URL, f"behavior-memory:{source_event_id}"))
+        async with self.database.session() as session, session.begin():
+            existing = await session.scalar(
+                select(BehaviorMemoryRecord.id).where(
+                    BehaviorMemoryRecord.source_event_id == source_event_id
+                )
+            )
+            if existing is not None:
+                return existing
+            session.add(
+                BehaviorMemoryRecord(
+                    id=memory_id,
+                    source_event_id=source_event_id,
+                    user_id=user_id,
+                    task_id=task_id,
+                    task_title=task_title,
+                    action=action.value,
+                    occurred_at=occurred_at,
+                    context=context,
+                    embedding=embedding,
+                )
+            )
+        return memory_id
+
+    async def similar_episodes(
+        self,
+        *,
+        user_id: str,
+        embedding: list[float],
+        exclude_source_event_id: str,
+        limit: int = 5,
+    ) -> list[SimilarBehaviorEpisode]:
+        if self.database.engine.url.get_backend_name() == "postgresql":
+            distance = cast(Any, BehaviorMemoryRecord.embedding).cosine_distance(embedding)
+            async with self.database.session() as session:
+                rows = (
+                    await session.execute(
+                        select(
+                            BehaviorMemoryRecord,
+                            (1 - distance).label("similarity"),
+                        )
+                        .where(
+                            BehaviorMemoryRecord.user_id == user_id,
+                            BehaviorMemoryRecord.source_event_id != exclude_source_event_id,
+                        )
+                        .order_by(distance)
+                        .limit(limit)
+                    )
+                ).all()
+            return [self._episode(record, float(similarity)) for record, similarity in rows]
+
+        async with self.database.session() as session:
+            records = (
+                await session.scalars(
+                    select(BehaviorMemoryRecord)
+                    .where(
+                        BehaviorMemoryRecord.user_id == user_id,
+                        BehaviorMemoryRecord.source_event_id != exclude_source_event_id,
+                    )
+                    .order_by(BehaviorMemoryRecord.occurred_at.desc())
+                    .limit(200)
+                )
+            ).all()
+        ranked = sorted(
+            ((record, cosine_similarity(embedding, list(record.embedding))) for record in records),
+            key=lambda item: item[1],
+            reverse=True,
+        )[:limit]
+        return [self._episode(record, similarity) for record, similarity in ranked]
+
+    @staticmethod
+    def _episode(
+        record: BehaviorMemoryRecord,
+        similarity: float,
+    ) -> SimilarBehaviorEpisode:
+        return SimilarBehaviorEpisode(
+            memory_id=record.id,
+            task_id=record.task_id,
+            task_title=record.task_title,
+            action=TaskAction(record.action),
+            occurred_at=EventRepository._as_utc(record.occurred_at),
+            similarity=max(0.0, min(1.0, similarity)),
+            context=record.context,
+        )
+
+
 class PlanRepository:
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -421,6 +559,10 @@ class PlanRepository:
             record.updated_at = utc_now()
 
     async def task_title(self, user_id: str, task_id: str) -> str | None:
+        item = await self.task_item(user_id, task_id)
+        return item.title if item else None
+
+    async def task_item(self, user_id: str, task_id: str) -> DailyPlanItem | None:
         async with self.database.session() as session:
             records = (
                 await session.scalars(
@@ -434,7 +576,7 @@ class PlanRepository:
             plan = DailyPlan.model_validate(record.plan)
             for item in plan.items:
                 if item.task_id == task_id:
-                    return item.title
+                    return item
         return None
 
     async def resolve_approval_token(

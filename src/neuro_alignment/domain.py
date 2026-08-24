@@ -128,6 +128,18 @@ class EvidenceEvent(BaseModel):
     source: str
 
 
+class SimilarBehaviorEpisode(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    memory_id: str
+    task_id: str
+    task_title: str
+    action: TaskAction
+    occurred_at: datetime
+    similarity: float = Field(ge=0, le=1)
+    context: dict[str, Any] = Field(default_factory=dict)
+
+
 class BehaviorEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -135,6 +147,7 @@ class BehaviorEvidence(BaseModel):
     total_events: int
     counts: dict[str, int] = Field(default_factory=dict)
     recent_events: list[EvidenceEvent] = Field(default_factory=list)
+    similar_episodes: list[SimilarBehaviorEpisode] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     has_sufficient_history: bool = False
 

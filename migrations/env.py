@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from logging.config import fileConfig
 from pathlib import Path
+from typing import Any
 
 from alembic import context
 from alembic.runtime.environment import NameFilterParentNames, NameFilterType
@@ -33,6 +34,19 @@ def include_name(
     return True
 
 
+def include_object(
+    _object: Any,
+    name: str | None,
+    type_: str,
+    _reflected: bool,
+    _compare_to: Any,
+) -> bool:
+    """Exclude PostgreSQL-only indexes from SQLite drift comparisons."""
+    if type_ == "index" and name == "ix_behavioral_memories_embedding_hnsw":
+        return context.get_context().dialect.name == "postgresql"
+    return True
+
+
 def is_sqlite_url(url: str) -> bool:
     return make_url(url).get_backend_name() == "sqlite"
 
@@ -57,6 +71,7 @@ def run_migrations_offline() -> None:
         compare_server_default=True,
         render_as_batch=is_sqlite_url(settings.database_url),
         include_name=include_name,
+        include_object=include_object,
     )
 
     with context.begin_transaction():
@@ -72,6 +87,7 @@ def do_run_migrations(connection: Connection) -> None:
         compare_server_default=True,
         render_as_batch=connection.dialect.name == "sqlite",
         include_name=include_name,
+        include_object=include_object,
     )
 
     with context.begin_transaction():

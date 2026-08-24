@@ -21,7 +21,13 @@ from neuro_alignment.domain import (
     TaskAction,
 )
 from neuro_alignment.intelligence import RuleBasedIntelligenceProvider
-from neuro_alignment.storage import Database, EventRepository, OutboxRepository, PlanRepository
+from neuro_alignment.storage import (
+    Database,
+    EventRepository,
+    MemoryRepository,
+    OutboxRepository,
+    PlanRepository,
+)
 from neuro_alignment.workflow import (
     UnsafeFeedbackError,
     WorkflowDependencies,
@@ -44,6 +50,7 @@ class WorkflowTestRuntime:
     engine: WorkflowEngine
     database: Database
     events: EventRepository
+    memory: MemoryRepository
     plans: PlanRepository
     outbox: OutboxRepository
     notion: StubCommitmentSource
@@ -205,6 +212,11 @@ async def test_behavior_feedback_uses_evidence_and_keeps_threads_isolated(
         assert second_snapshot.values["event"]["event_id"] == "telegram-task-2"
         assert first_snapshot.values["evidence"]["counts"] == {"task.started": 1}
         assert second_snapshot.values["evidence"]["counts"] == {"task.completed": 1}
+        similar = second_snapshot.values["evidence"]["similar_episodes"]
+        assert len(similar) == 1
+        assert similar[0]["task_id"] == "task-a"
+        assert similar[0]["action"] == "started"
+        assert 0 < similar[0]["similarity"] <= 1
 
         messages = [message for _record_id, message in await runtime.outbox.pending()]
         assert len(messages) == 2
@@ -301,6 +313,7 @@ async def build_runtime(
     database = Database(settings.database_url)
     await database.create_schema()
     events = EventRepository(database)
+    memory = MemoryRepository(database)
     plans = PlanRepository(database)
     outbox = OutboxRepository(database)
     notion = StubCommitmentSource(tasks)
@@ -308,6 +321,7 @@ async def build_runtime(
         WorkflowDependencies(
             settings=settings,
             events=events,
+            memory=memory,
             plans=plans,
             outbox=outbox,
             notion=notion,
@@ -320,6 +334,7 @@ async def build_runtime(
             engine=engine,
             database=database,
             events=events,
+            memory=memory,
             plans=plans,
             outbox=outbox,
             notion=notion,

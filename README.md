@@ -1,6 +1,7 @@
 # Neuro-Cognitive Alignment Engine
 
-A stateful, evidence-aware intent-action alignment system built with LangGraph, FastAPI, PostgreSQL, Notion, Telegram, OpenAI, and Pinecone.
+A stateful, evidence-aware intent-action alignment system built with LangGraph, FastAPI,
+PostgreSQL/pgvector, Notion, Telegram, and an optional OpenAI provider.
 
 ## Project Vision
 
@@ -25,7 +26,7 @@ The system is not a generic reminder bot and does not provide medical diagnosis 
 - FastAPI
 - LangGraph
 - PostgreSQL
-- Pinecone
+- Neon PostgreSQL with pgvector
 - Notion API
 - Telegram Bot API
 - OpenAI Responses API
@@ -44,7 +45,8 @@ planning and evidence-bounded feedback generation. Its current branches are:
 claim inbound event
 ├── daily plan -> Notion -> Planner Agent -> persist plan -> Telegram outbox
 ├── plan decision -> approve/reject persisted plan -> Telegram outbox
-├── task behavior -> record event -> retrieve evidence -> Neuro-Behavioral Agent
+├── task behavior -> record event + vector memory -> retrieve similar evidence
+│                    -> Neuro-Behavioral Agent
 │                    -> Safety Critic -> Telegram outbox
 └── check-in -> record self-report
 ```
@@ -57,7 +59,9 @@ LangGraph checkpoints and behavioral memory serve different purposes:
 
 - Checkpoints persist graph execution state and recovery history per `thread_id`.
 - Operational events persist observed behavior used to construct evidence.
-- Semantic long-term memory will later retrieve similar episodes across threads.
+- Behavioral long-term memory retrieves similar episodes across tasks and threads using
+  explainable context vectors. These encode observable planning factors rather than
+  claiming language-level semantic or neurological measurement.
 
 Checkpoint backends are selected with `CHECKPOINT_BACKEND`: `memory` for tests, `sqlite`
 for local experiments, and `postgres` for the durable runtime. PostgreSQL checkpoint tables

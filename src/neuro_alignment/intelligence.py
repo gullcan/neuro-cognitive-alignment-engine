@@ -121,6 +121,20 @@ class RuleBasedIntelligenceProvider:
             )
             confidence = 0.55
 
+        if evidence.similar_episodes:
+            similar_counts: dict[str, int] = {}
+            for episode in evidence.similar_episodes:
+                similar_counts[episode.action.value] = (
+                    similar_counts.get(episode.action.value, 0) + 1
+                )
+            summary = ", ".join(
+                f"{count} {action}" for action, count in sorted(similar_counts.items())
+            )
+            pattern = (
+                f"{pattern} Benzer planlama bağlamlarında bulunan geçmiş olaylar: {summary}. "
+                "Bu eşleşme bağlamsal yakınlıktır; aynı nedenin kanıtı değildir."
+            )
+
         if action == TaskAction.COMPLETED:
             gap = f"'{task_title}' için verilen söz davranışla kapatıldı."
             intervention = (

@@ -15,12 +15,13 @@ from neuro_alignment.config import get_settings
 
 PROJECT_ROOT = Path(__file__).parents[1]
 BASE_REVISION = "e4d7a9136c84"
-HEAD_REVISION = "b61e9f0c2d47"
+HEAD_REVISION = "7a2f4c9d1e30"
 APPLICATION_TABLES = {
     "daily_plans",
     "domain_events",
     "inbound_events",
     "outbox",
+    "behavioral_memories",
 }
 
 
@@ -129,6 +130,10 @@ def test_postgresql_offline_ddl_uses_jsonb_and_query_indexes(
     assert "ALTER COLUMN buttons TYPE JSONB USING buttons::jsonb" in ddl
     assert "CREATE INDEX ix_domain_events_user_task_occurred_at" in ddl
     assert "CREATE INDEX ix_outbox_status_created_at" in ddl
+    assert "CREATE EXTENSION IF NOT EXISTS vector" in ddl
+    assert "embedding VECTOR(32) NOT NULL" in ddl
+    assert "CREATE INDEX ix_behavioral_memories_embedding_hnsw" in ddl
+    assert "USING hnsw (embedding vector_cosine_ops)" in ddl
 
     downgrade_output = StringIO()
     command.downgrade(
