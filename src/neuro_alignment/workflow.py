@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Literal, Protocol, TypedDict, cast
 
 import structlog
@@ -26,6 +26,7 @@ from neuro_alignment.domain import (
     OutboundMessage,
     ProcessResult,
     TaskAction,
+    TaskDayActivity,
 )
 from neuro_alignment.intelligence import IntelligenceProvider
 from neuro_alignment.memory import build_behavior_context
@@ -38,8 +39,15 @@ from neuro_alignment.storage import (
 
 logger = structlog.get_logger()
 
-WorkflowRoute = Literal["daily_plan", "plan_decision", "behavior", "checkin"]
-RouteDecision = Literal["duplicate", "daily_plan", "plan_decision", "behavior", "checkin"]
+WorkflowRoute = Literal["daily_plan", "task_monitor", "plan_decision", "behavior", "checkin"]
+RouteDecision = Literal[
+    "duplicate",
+    "daily_plan",
+    "task_monitor",
+    "plan_decision",
+    "behavior",
+    "checkin",
+]
 FeedbackDecision = Literal["approved", "retry"]
 
 
@@ -53,6 +61,7 @@ class WorkflowState(TypedDict):
     tasks: list[dict[str, Any]]
     plan: dict[str, Any] | None
     approval_token: str | None
+    task_activity: dict[str, dict[str, Any]]
     evidence: dict[str, Any] | None
     behavior_context: dict[str, Any] | None
     behavior_vector: list[float]
@@ -152,6 +161,7 @@ class WorkflowEngine:
         """Keep execution history isolated by business aggregate."""
         if event.event_type in {
             InboundEventType.DAILY_PLAN_REQUESTED,
+            InboundEventType.TASK_MONITOR_TICK,
             InboundEventType.NOTION_CHANGED,
         }:
             return f"daily:{event.user_id}:{self._plan_date(event).isoformat()}"
@@ -170,6 +180,10 @@ class WorkflowEngine:
         builder.add_node("planner_agent", self._planner_agent)
         builder.add_node("persist_plan", self._persist_plan)
         builder.add_node("queue_plan", self._queue_plan)
+
+        builder.add_node("load_approved_plan", self._load_approved_plan)
+        builder.add_node("load_task_activity", self._load_task_activity)
+        builder.add_node("queue_monitor_messages", self._queue_monitor_messages)
 
         builder.add_node("apply_plan_decision", self._apply_plan_decision)
 
@@ -190,6 +204,7 @@ class WorkflowEngine:
             {
                 "duplicate": END,
                 "daily_plan": "load_commitments",
+                "task_monitor": "load_approved_plan",
                 "plan_decision": "apply_plan_decision",
                 "behavior": "record_behavior",
                 "checkin": "record_checkin",
@@ -200,6 +215,10 @@ class WorkflowEngine:
         builder.add_edge("planner_agent", "persist_plan")
         builder.add_edge("persist_plan", "queue_plan")
         builder.add_edge("queue_plan", "complete_event")
+
+        builder.add_edge("load_approved_plan", "load_task_activity")
+        builder.add_edge("load_task_activity", "queue_monitor_messages")
+        builder.add_edge("queue_monitor_messages", "complete_event")
 
         builder.add_edge("apply_plan_decision", "complete_event")
 
@@ -310,6 +329,161 @@ class WorkflowEngine:
             queued = await self.dependencies.outbox.enqueue([message])
         return {"queued_messages": queued, "status": "plan_created"}
 
+    async def _load_approved_plan(self, state: WorkflowState) -> StateUpdate:
+        event = self._event(state)
+        resolved = await self.dependencies.plans.approved_plan(
+            event.user_id,
+            self._plan_date(event),
+        )
+        if resolved is None:
+            return {
+                "plan": None,
+                "approval_token": None,
+                "status": "monitor_no_approved_plan",
+            }
+        approval_token, plan = resolved
+        return {
+            "plan": plan.model_dump(mode="json"),
+            "approval_token": approval_token,
+        }
+
+    async def _load_task_activity(self, state: WorkflowState) -> StateUpdate:
+        raw_plan = state["plan"]
+        if raw_plan is None:
+            return {"task_activity": {}}
+        plan = DailyPlan.model_validate(raw_plan)
+        period_start = datetime.combine(
+            plan.plan_date,
+            time.min,
+            tzinfo=self.dependencies.settings.tz,
+        ).astimezone(UTC)
+        period_end = period_start + timedelta(days=1)
+        activity = await self.dependencies.events.task_activity_for_period(
+            user_id=self._event(state).user_id,
+            task_ids=[item.task_id for item in plan.items],
+            period_start=period_start,
+            period_end=period_end,
+        )
+        return {
+            "task_activity": {
+                task_id: value.model_dump(mode="json") for task_id, value in activity.items()
+            }
+        }
+
+    async def _queue_monitor_messages(self, state: WorkflowState) -> StateUpdate:
+        raw_plan = state["plan"]
+        token = state["approval_token"]
+        chat_id = self._chat_id(self._event(state))
+        if raw_plan is None or token is None or not chat_id:
+            return {"queued_messages": 0, "status": state["status"]}
+
+        plan = DailyPlan.model_validate(raw_plan)
+        now = self._event(state).occurred_at.astimezone(self.dependencies.settings.tz)
+        activities = {
+            task_id: TaskDayActivity.model_validate(value)
+            for task_id, value in state["task_activity"].items()
+        }
+        messages: list[OutboundMessage] = []
+        terminal_actions = {
+            TaskAction.COMPLETED,
+            TaskAction.SKIPPED,
+            TaskAction.RESCHEDULED,
+        }
+
+        for item in plan.items:
+            scheduled_start = self._scheduled_start(item)
+            if scheduled_start is None or now < scheduled_start:
+                continue
+            activity = activities.get(item.task_id)
+            latest_action = activity.latest_action if activity else None
+            if activity and activity.counts.get("task.completed", 0) > 0:
+                continue
+            if latest_action in terminal_actions:
+                continue
+
+            if latest_action is None:
+                grace_end = scheduled_start + timedelta(
+                    minutes=self.dependencies.settings.task_start_grace_minutes
+                )
+                if now < grace_end:
+                    kind = "due"
+                    text = self._format_due_reminder(item, scheduled_start)
+                else:
+                    kind = "start-check"
+                    text = self._format_start_check(item, scheduled_start)
+                messages.append(
+                    self._task_monitor_message(
+                        idempotency_key=f"task-{kind}:{token}:{item.task_id}",
+                        chat_id=chat_id,
+                        item=item,
+                        text=text,
+                    )
+                )
+                continue
+
+            latest_at = activity.latest_action_at if activity else None
+            if latest_at is None:
+                continue
+            latest_local = latest_at.astimezone(self.dependencies.settings.tz)
+            if latest_action == TaskAction.STARTED:
+                expected_minutes = (
+                    item.estimated_minutes
+                    or self.dependencies.settings.task_progress_default_minutes
+                )
+                if now >= latest_local + timedelta(minutes=expected_minutes):
+                    messages.append(
+                        self._task_monitor_message(
+                            idempotency_key=f"task-progress-check:{token}:{item.task_id}",
+                            chat_id=chat_id,
+                            item=item,
+                            text=self._format_progress_check(item, expected_minutes),
+                        )
+                    )
+            elif latest_action == TaskAction.BLOCKED and now >= latest_local + timedelta(
+                minutes=self.dependencies.settings.blocked_follow_up_minutes
+            ):
+                messages.append(
+                    self._task_monitor_message(
+                        idempotency_key=f"task-blocked-check:{token}:{item.task_id}",
+                        chat_id=chat_id,
+                        item=item,
+                        text=self._format_blocked_check(item),
+                    )
+                )
+
+        open_items = [
+            item
+            for item in plan.items
+            if activities.get(item.task_id) is None
+            or activities[item.task_id].counts.get("task.completed", 0) == 0
+        ]
+        completed_count = len(plan.items) - len(open_items)
+        if plan.items and now.hour >= self.dependencies.settings.day_summary_hour:
+            messages.append(
+                self._day_status_message(
+                    idempotency_key=f"day-summary:{token}",
+                    chat_id=chat_id,
+                    heading="GÜNÜN SON KONTROLÜ",
+                    plan=plan,
+                    open_items=open_items,
+                    completed_count=completed_count,
+                )
+            )
+        elif plan.items and now.hour >= self.dependencies.settings.day_recovery_hour:
+            messages.append(
+                self._day_status_message(
+                    idempotency_key=f"day-recovery:{token}",
+                    chat_id=chat_id,
+                    heading="GÜN SONU YAKLAŞIYOR",
+                    plan=plan,
+                    open_items=open_items,
+                    completed_count=completed_count,
+                )
+            )
+
+        queued = await self.dependencies.outbox.enqueue(messages)
+        return {"queued_messages": queued, "status": "task_monitor_completed"}
+
     async def _apply_plan_decision(self, state: WorkflowState) -> StateUpdate:
         event = self._event(state)
         action = event.action
@@ -352,7 +526,8 @@ class WorkflowEngine:
         chat_id = self._chat_id(event)
         if chat_id:
             decision_text = (
-                "Plan onaylandı. Gün içindeki davranış olayları bu taahhütlere bağlanacak."
+                "Plan onaylandı. Saatli görevler zamanı geldiğinde açılacak; "
+                "sistem başlangıç ve ilerleme kanıtını gün boyunca takip edecek."
                 if status == "approved"
                 else "Plan reddedildi. Yeni plan oluşturulmadan taahhüt seti aktif sayılmayacak."
             )
@@ -371,6 +546,7 @@ class WorkflowEngine:
                         item=item,
                     )
                     for item in plan.items
+                    if self._scheduled_start(item) is None
                 )
             queued = await self.dependencies.outbox.enqueue(messages)
         return {
@@ -397,35 +573,39 @@ class WorkflowEngine:
                 f"Tamamlanma kanıtı: {definition}\n\n"
                 "Durumu yalnızca gözlenebilir eylemine göre seç."
             ),
-            buttons=[
-                [
-                    InlineButton(
-                        text="Başlattım",
-                        callback_data=f"task:started:{item.task_id}",
-                    ),
-                    InlineButton(
-                        text="Tamamladım",
-                        callback_data=f"task:completed:{item.task_id}",
-                    ),
-                ],
-                [
-                    InlineButton(
-                        text="Engellendim",
-                        callback_data=f"task:blocked:{item.task_id}",
-                    ),
-                    InlineButton(
-                        text="Atladım",
-                        callback_data=f"task:skipped:{item.task_id}",
-                    ),
-                ],
-                [
-                    InlineButton(
-                        text="Erteledim",
-                        callback_data=f"task:rescheduled:{item.task_id}",
-                    )
-                ],
-            ],
+            buttons=WorkflowEngine._task_action_buttons(item.task_id),
         )
+
+    @staticmethod
+    def _task_action_buttons(task_id: str) -> list[list[InlineButton]]:
+        return [
+            [
+                InlineButton(
+                    text="Başlattım",
+                    callback_data=f"task:started:{task_id}",
+                ),
+                InlineButton(
+                    text="Tamamladım",
+                    callback_data=f"task:completed:{task_id}",
+                ),
+            ],
+            [
+                InlineButton(
+                    text="Engellendim",
+                    callback_data=f"task:blocked:{task_id}",
+                ),
+                InlineButton(
+                    text="Atladım",
+                    callback_data=f"task:skipped:{task_id}",
+                ),
+            ],
+            [
+                InlineButton(
+                    text="Erteledim",
+                    callback_data=f"task:rescheduled:{task_id}",
+                )
+            ],
+        ]
 
     async def _record_behavior(self, state: WorkflowState) -> StateUpdate:
         event = self._event(state)
@@ -631,6 +811,8 @@ class WorkflowEngine:
             InboundEventType.NOTION_CHANGED,
         }:
             return "daily_plan"
+        if event.event_type == InboundEventType.TASK_MONITOR_TICK:
+            return "task_monitor"
         if event.event_type == InboundEventType.TELEGRAM_MESSAGE:
             return "checkin"
         if event.event_type == InboundEventType.TELEGRAM_ACTION:
@@ -668,6 +850,7 @@ class WorkflowEngine:
             tasks=[],
             plan=None,
             approval_token=None,
+            task_activity={},
             evidence=None,
             behavior_context=None,
             behavior_vector=[],
@@ -719,6 +902,104 @@ class WorkflowEngine:
             lines.extend(("", f"Kapasite uyarısı: {plan.capacity_warning}"))
         lines.extend(("", "Bu plan ancak onayından sonra aktif taahhüt sayılacak."))
         return "\n".join(lines)[:4096]
+
+    def _scheduled_start(self, item: DailyPlanItem) -> datetime | None:
+        scheduled_start = item.scheduled_start
+        if scheduled_start is None:
+            return None
+        if scheduled_start.tzinfo is None:
+            return scheduled_start.replace(tzinfo=self.dependencies.settings.tz)
+        return scheduled_start.astimezone(self.dependencies.settings.tz)
+
+    @classmethod
+    def _task_monitor_message(
+        cls,
+        *,
+        idempotency_key: str,
+        chat_id: str,
+        item: DailyPlanItem,
+        text: str,
+    ) -> OutboundMessage:
+        return OutboundMessage(
+            idempotency_key=idempotency_key,
+            chat_id=chat_id,
+            text=text,
+            buttons=cls._task_action_buttons(item.task_id),
+        )
+
+    @staticmethod
+    def _format_due_reminder(item: DailyPlanItem, scheduled_start: datetime) -> str:
+        minimum_action = item.minimum_action or "İlk fiziksel adımı belirle ve başlat."
+        return (
+            f"SAATİ GELDİ · {scheduled_start:%H:%M}\n{item.title}\n\n"
+            f"Şimdi yalnızca Minimum Action'ı başlat: {minimum_action} "
+            "Başladığında 'Başlattım'a bas; niyet değil, başlangıç kaydı oluştur."
+        )
+
+    @staticmethod
+    def _format_start_check(item: DailyPlanItem, scheduled_start: datetime) -> str:
+        minimum_action = item.minimum_action or "İlk fiziksel adımı belirle ve başlat."
+        return (
+            f"BAŞLANGIÇ KONTROLÜ · {scheduled_start:%H:%M}\n{item.title}\n\n"
+            "Planlanan saat geçti ve henüz davranış kaydı yok. Sessizlik görevi ilerletmez: "
+            f"şimdi {minimum_action} Sonra gerçek durumu aşağıdan bildir."
+        )
+
+    @staticmethod
+    def _format_progress_check(item: DailyPlanItem, expected_minutes: int) -> str:
+        definition = item.definition_of_done or "Somut tamamlanma kanıtını bildir."
+        return (
+            f"İLERLEME KONTROLÜ · {item.title}\n\n"
+            f"Başlangıç kaydından {expected_minutes} dakika geçti; sonuç kaydı henüz yok. "
+            f"Bittiyse kanıtı tamamla: {definition} Devam etmiyorsa gerçek engeli seç."
+        )
+
+    @staticmethod
+    def _format_blocked_check(item: DailyPlanItem) -> str:
+        minimum_action = item.minimum_action or "İlk fiziksel adımı belirle ve başlat."
+        return (
+            f"ENGEL TAKİBİ · {item.title}\n\n"
+            "Engel kaydından sonra yeni davranış kanıtı gelmedi. Engel hâlâ gerçekse "
+            f"somutlaştır; çözüldüyse zinciri yeniden başlat: {minimum_action}"
+        )
+
+    @classmethod
+    def _day_status_message(
+        cls,
+        *,
+        idempotency_key: str,
+        chat_id: str,
+        heading: str,
+        plan: DailyPlan,
+        open_items: list[DailyPlanItem],
+        completed_count: int,
+    ) -> OutboundMessage:
+        if not open_items:
+            text = (
+                f"{heading}\n{completed_count}/{len(plan.items)} taahhüt tamamlandı. "
+                "Bugünün planını eksiksiz davranış kanıtıyla kapattın; hangi başlangıç "
+                "ipucunun en iyi çalıştığını yarın yeniden kullanmak için kaydet."
+            )
+            buttons: list[list[InlineButton]] = []
+        else:
+            visible_titles = ", ".join(item.title for item in open_items[:4])
+            remaining_count = len(open_items) - 4
+            if remaining_count > 0:
+                visible_titles += f" ve {remaining_count} görev daha"
+            first = open_items[0]
+            minimum_action = first.minimum_action or "İlk fiziksel adımı belirle ve başlat."
+            text = (
+                f"{heading}\n{completed_count}/{len(plan.items)} taahhüt tamamlandı. "
+                f"Açık kalanlar: {visible_titles}. Şimdi ilk açık görevin zincirini kapat: "
+                f"{minimum_action}"
+            )
+            buttons = cls._task_action_buttons(first.task_id)
+        return OutboundMessage(
+            idempotency_key=idempotency_key,
+            chat_id=chat_id,
+            text=text[:4096],
+            buttons=buttons,
+        )
 
     @staticmethod
     def _format_feedback(feedback: NeuroFeedback) -> str:

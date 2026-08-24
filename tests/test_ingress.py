@@ -240,6 +240,39 @@ async def test_scheduler_requires_internal_key_and_builds_daily_plan(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_task_monitor_requires_internal_key_and_is_safe_without_plan(
+    tmp_path: Path,
+) -> None:
+    settings = build_settings(tmp_path)
+    services = await build_services(settings)
+    application = create_app(settings=settings, service_builder=lambda _settings: services)
+    body = {
+        "observed_at": "2026-08-05T12:05:00+03:00",
+        "request_id": "manual-monitor-2026-08-05-1205",
+    }
+
+    async with (
+        application.router.lifespan_context(application),
+        build_client(application) as client,
+    ):
+        unauthorized = await client.post(
+            "/v1/internal/scheduler/task-monitor",
+            json=body,
+            headers={"X-Internal-Api-Key": "wrong"},
+        )
+        response = await client.post(
+            "/v1/internal/scheduler/task-monitor",
+            json=body,
+            headers={"X-Internal-Api-Key": "internal-secret"},
+        )
+
+    assert unauthorized.status_code == 401
+    assert response.status_code == 200
+    assert response.json()["status"] == "monitor_no_approved_plan"
+    assert response.json()["queued_messages"] == 0
+
+
+@pytest.mark.asyncio
 async def test_internal_outbox_endpoint_delivers_with_leased_worker(tmp_path: Path) -> None:
     settings = build_settings(tmp_path, telegram_delivery_enabled=True)
     services = await build_services(settings)

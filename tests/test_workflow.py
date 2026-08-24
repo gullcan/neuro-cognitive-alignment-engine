@@ -102,6 +102,47 @@ async def test_daily_plan_is_persisted_queued_and_idempotent(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_same_day_plan_refresh_gets_a_new_content_bound_approval_token(
+    tmp_path: Path,
+) -> None:
+    original = NotionTask(
+        page_id="refresh-task",
+        title="İlk plan sürümü",
+        scheduled_date=date(2026, 8, 5),
+        commitment_tier="Core",
+        priority="P1",
+        definition_of_done="İlk sürüm tamamlandı",
+        minimum_action="İlk sürümü aç",
+    )
+    async with build_runtime(tmp_path, tasks=[original]) as runtime:
+        await runtime.engine.process(
+            make_event(
+                event_id="plan-version-1",
+                event_type=InboundEventType.DAILY_PLAN_REQUESTED,
+                source=EventSource.SCHEDULER,
+                payload={"plan_date": "2026-08-05"},
+            )
+        )
+        first_message = (await runtime.outbox.pending())[-1][1]
+        first_token = first_message.buttons[0][0].callback_data.rsplit(":", 1)[1]
+
+        runtime.notion.tasks = [original.model_copy(update={"title": "İkinci plan sürümü"})]
+        await runtime.engine.process(
+            make_event(
+                event_id="plan-version-2",
+                event_type=InboundEventType.DAILY_PLAN_REQUESTED,
+                source=EventSource.SCHEDULER,
+                payload={"plan_date": "2026-08-05"},
+            )
+        )
+        second_message = (await runtime.outbox.pending())[-1][1]
+        second_token = second_message.buttons[0][0].callback_data.rsplit(":", 1)[1]
+
+        assert first_token != second_token
+        assert "İkinci plan sürümü" in second_message.text
+
+
+@pytest.mark.asyncio
 async def test_plan_approval_follows_its_own_deterministic_branch(tmp_path: Path) -> None:
     task = NotionTask(
         page_id="notion-task-approval",
@@ -147,6 +188,128 @@ async def test_plan_approval_follows_its_own_deterministic_branch(tmp_path: Path
             ["Erteledim"],
         ]
         assert task_message.buttons[0][0].callback_data == ("task:started:notion-task-approval")
+
+
+@pytest.mark.asyncio
+async def test_monitor_controls_every_scheduled_task_and_closes_the_day(tmp_path: Path) -> None:
+    first_task = NotionTask(
+        page_id="scheduled-task-1",
+        title="İlk entegrasyonu doğrula",
+        scheduled_date=date(2026, 8, 5),
+        scheduled_start=datetime(2026, 8, 5, 9, 0, tzinfo=UTC),
+        commitment_tier="Core",
+        priority="P1",
+        definition_of_done="İlk test geçti",
+        minimum_action="İlk test dosyasını aç.",
+        estimated_minutes=30,
+    )
+    second_task = NotionTask(
+        page_id="scheduled-task-2",
+        title="İkinci entegrasyonu doğrula",
+        scheduled_date=date(2026, 8, 5),
+        scheduled_start=datetime(2026, 8, 5, 10, 0, tzinfo=UTC),
+        commitment_tier="Core",
+        priority="P1",
+        definition_of_done="İkinci test geçti",
+        minimum_action="İkinci test dosyasını aç.",
+        estimated_minutes=30,
+    )
+    async with build_runtime(tmp_path, tasks=[first_task, second_task]) as runtime:
+        await runtime.engine.process(
+            make_event(
+                event_id="scheduled-plan",
+                event_type=InboundEventType.DAILY_PLAN_REQUESTED,
+                source=EventSource.SCHEDULER,
+                payload={"plan_date": "2026-08-05"},
+                occurred_at=datetime(2026, 8, 5, 8, 0, tzinfo=UTC),
+            )
+        )
+        plan_message = (await runtime.outbox.pending())[0][1]
+        token = plan_message.buttons[0][0].callback_data.rsplit(":", maxsplit=1)[1]
+        approval = await runtime.engine.process(
+            make_event(
+                event_id="scheduled-plan-approval",
+                event_type=InboundEventType.TELEGRAM_ACTION,
+                source=EventSource.TELEGRAM,
+                action=TaskAction.PLAN_APPROVED,
+                payload={"approval_token": token, "chat_id": "12345"},
+                occurred_at=datetime(2026, 8, 5, 8, 5, tzinfo=UTC),
+            )
+        )
+        assert approval.queued_messages == 1
+
+        due_first = await runtime.engine.process(
+            monitor_event("monitor-1205", datetime(2026, 8, 5, 9, 5, tzinfo=UTC))
+        )
+        assert due_first.queued_messages == 1
+        duplicate = await runtime.engine.process(
+            monitor_event("monitor-1205", datetime(2026, 8, 5, 9, 5, tzinfo=UTC))
+        )
+        assert duplicate.duplicate
+
+        overdue_first = await runtime.engine.process(
+            monitor_event("monitor-1220", datetime(2026, 8, 5, 9, 20, tzinfo=UTC))
+        )
+        assert overdue_first.queued_messages == 1
+        await runtime.engine.process(
+            make_event(
+                event_id="complete-first",
+                event_type=InboundEventType.TELEGRAM_ACTION,
+                source=EventSource.TELEGRAM,
+                task_id=first_task.page_id,
+                action=TaskAction.COMPLETED,
+                payload={"chat_id": "12345"},
+                occurred_at=datetime(2026, 8, 5, 9, 21, tzinfo=UTC),
+            )
+        )
+
+        due_second = await runtime.engine.process(
+            monitor_event("monitor-1305", datetime(2026, 8, 5, 10, 5, tzinfo=UTC))
+        )
+        assert due_second.queued_messages == 1
+        await runtime.engine.process(
+            make_event(
+                event_id="start-second",
+                event_type=InboundEventType.TELEGRAM_ACTION,
+                source=EventSource.TELEGRAM,
+                task_id=second_task.page_id,
+                action=TaskAction.STARTED,
+                payload={"chat_id": "12345"},
+                occurred_at=datetime(2026, 8, 5, 10, 6, tzinfo=UTC),
+            )
+        )
+        progress_second = await runtime.engine.process(
+            monitor_event("monitor-1340", datetime(2026, 8, 5, 10, 40, tzinfo=UTC))
+        )
+        assert progress_second.queued_messages == 1
+        await runtime.engine.process(
+            make_event(
+                event_id="complete-second",
+                event_type=InboundEventType.TELEGRAM_ACTION,
+                source=EventSource.TELEGRAM,
+                task_id=second_task.page_id,
+                action=TaskAction.COMPLETED,
+                payload={"chat_id": "12345"},
+                occurred_at=datetime(2026, 8, 5, 16, 30, tzinfo=UTC),
+            )
+        )
+
+        recovery = await runtime.engine.process(
+            monitor_event("monitor-2000", datetime(2026, 8, 5, 17, 0, tzinfo=UTC))
+        )
+        final = await runtime.engine.process(
+            monitor_event("monitor-2300", datetime(2026, 8, 5, 20, 0, tzinfo=UTC))
+        )
+        assert recovery.queued_messages == 1
+        assert final.queued_messages == 1
+
+        messages = [message for _record_id, message in await runtime.outbox.pending()]
+        assert any("SAATİ GELDİ · 12:00" in message.text for message in messages)
+        assert any("BAŞLANGIÇ KONTROLÜ · 12:00" in message.text for message in messages)
+        assert any("SAATİ GELDİ · 13:00" in message.text for message in messages)
+        assert any("İLERLEME KONTROLÜ" in message.text for message in messages)
+        assert any("GÜN SONU YAKLAŞIYOR\n2/2" in message.text for message in messages)
+        assert any("GÜNÜN SON KONTROLÜ\n2/2" in message.text for message in messages)
 
 
 @pytest.mark.asyncio
@@ -391,14 +554,25 @@ def make_event(
     task_id: str | None = None,
     action: TaskAction | None = None,
     payload: dict[str, object] | None = None,
+    occurred_at: datetime | None = None,
 ) -> NormalizedInboundEvent:
     return NormalizedInboundEvent(
         event_id=event_id,
         event_type=event_type,
         source=source,
         user_id="owner",
-        occurred_at=datetime(2026, 8, 5, 8, 0, tzinfo=UTC),
+        occurred_at=occurred_at or datetime(2026, 8, 5, 8, 0, tzinfo=UTC),
         task_id=task_id,
         action=action,
         payload=payload or {},
+    )
+
+
+def monitor_event(event_id: str, occurred_at: datetime) -> NormalizedInboundEvent:
+    return make_event(
+        event_id=event_id,
+        event_type=InboundEventType.TASK_MONITOR_TICK,
+        source=EventSource.SCHEDULER,
+        payload={"plan_date": "2026-08-05"},
+        occurred_at=occurred_at,
     )

@@ -16,6 +16,7 @@ class EventSource(StrEnum):
 
 class InboundEventType(StrEnum):
     DAILY_PLAN_REQUESTED = "scheduler.daily_plan_requested"
+    TASK_MONITOR_TICK = "scheduler.task_monitor_tick"
     NOTION_CHANGED = "notion.commitment_changed"
     TELEGRAM_ACTION = "telegram.action_received"
     TELEGRAM_MESSAGE = "telegram.message_received"
@@ -52,6 +53,10 @@ ACTION_TO_DOMAIN_EVENT: dict[TaskAction, DomainEventType] = {
     TaskAction.BLOCKED: DomainEventType.TASK_BLOCKED,
     TaskAction.SKIPPED: DomainEventType.TASK_SKIPPED,
     TaskAction.RESCHEDULED: DomainEventType.TASK_RESCHEDULED,
+}
+
+DOMAIN_EVENT_TO_ACTION: dict[str, TaskAction] = {
+    event_type.value: action for action, event_type in ACTION_TO_DOMAIN_EVENT.items()
 }
 
 
@@ -150,6 +155,15 @@ class BehaviorEvidence(BaseModel):
     similar_episodes: list[SimilarBehaviorEpisode] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     has_sufficient_history: bool = False
+
+
+class TaskDayActivity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    latest_action: TaskAction | None = None
+    latest_action_at: datetime | None = None
+    counts: dict[str, int] = Field(default_factory=dict)
 
 
 class NeuroFeedback(BaseModel):

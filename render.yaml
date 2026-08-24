@@ -40,5 +40,15 @@ services:
         value: "5"
       - key: OUTBOX_LEASE_SECONDS
         value: "120"
+      - key: TASK_START_GRACE_MINUTES
+        value: "15"
+      - key: TASK_PROGRESS_DEFAULT_MINUTES
+        value: "30"
+      - key: BLOCKED_FOLLOW_UP_MINUTES
+        value: "30"
+      - key: DAY_RECOVERY_HOUR
+        value: "20"
+      - key: DAY_SUMMARY_HOUR
+        value: "23"
       - key: INTERNAL_API_KEY
         generateValue: true

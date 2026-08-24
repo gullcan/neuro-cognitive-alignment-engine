@@ -89,6 +89,7 @@ async def test_openapi_exposes_health_contract(tmp_path: Path) -> None:
         "/health/ready",
         "/v1/webhooks/telegram",
         "/v1/internal/scheduler/daily-plan",
+        "/v1/internal/scheduler/task-monitor",
         "/v1/internal/outbox/deliver",
     }
     assert schema["info"]["version"] == "0.1.0"

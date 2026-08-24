@@ -87,6 +87,18 @@ class DailyPlanTriggerRequest(BaseModel):
     )
 
 
+class TaskMonitorTriggerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    observed_at: datetime | None = None
+    request_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=120,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+    )
+
+
 class OutboxDeliveryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -318,6 +330,34 @@ def create_app(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Notion integration is not configured or available.",
             ) from error
+
+    @application.post(
+        "/v1/internal/scheduler/task-monitor",
+        response_model=EventProcessingResponse,
+        tags=["internal"],
+        summary="Run one idempotent task monitoring cycle",
+    )
+    async def trigger_task_monitor(
+        request_body: TaskMonitorTriggerRequest,
+        services: Services,
+        internal_api_key: InternalApiKeyHeader = None,
+    ) -> EventProcessingResponse:
+        require_internal_api_key(internal_api_key, configured_settings)
+        observed_at = request_body.observed_at or datetime.now(configured_settings.tz)
+        if observed_at.tzinfo is None:
+            observed_at = observed_at.replace(tzinfo=configured_settings.tz)
+        else:
+            observed_at = observed_at.astimezone(configured_settings.tz)
+        source_event_id = request_body.request_id or observed_at.strftime("%Y%m%d-%H%M")
+        event = NormalizedInboundEvent(
+            event_id=f"task-monitor:{configured_settings.default_user_id}:{source_event_id}",
+            event_type=InboundEventType.TASK_MONITOR_TICK,
+            source=EventSource.SCHEDULER,
+            user_id=configured_settings.default_user_id,
+            occurred_at=observed_at,
+            payload={"plan_date": observed_at.date().isoformat()},
+        )
+        return await process_and_deliver(event, services)
 
     @application.post(
         "/v1/internal/outbox/deliver",

@@ -1,13 +1,13 @@
-name: Daily Notion plan
+name: Notion task monitor
 
 on:
   schedule:
-    - cron: "35 7 * * *"
+    - cron: "*/15 * * * *"
       timezone: "Europe/Istanbul"
   workflow_dispatch:
     inputs:
-      plan_date:
-        description: "Optional plan date (YYYY-MM-DD); defaults to today in Istanbul"
+      observed_at:
+        description: "Optional ISO timestamp for a deterministic manual test"
         required: false
         type: string
 
@@ -15,17 +15,17 @@ permissions:
   contents: read
 
 concurrency:
-  group: daily-notion-plan
+  group: notion-task-monitor
   cancel-in-progress: false
 
 jobs:
-  trigger-daily-plan:
+  monitor-approved-plan:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       API_URL: "https://neuro-cognitive-alignment-engine.onrender.com"
       INTERNAL_API_KEY: ${{ secrets.RENDER_INTERNAL_API_KEY }}
-      INPUT_PLAN_DATE: ${{ inputs.plan_date }}
+      INPUT_OBSERVED_AT: ${{ inputs.observed_at }}
     steps:
       - name: Validate configuration
         shell: bash
@@ -35,23 +35,22 @@ jobs:
             exit 1
           fi
 
-      - name: Trigger idempotent daily plan
+      - name: Trigger idempotent task monitor
         shell: bash
         run: |
-          if [[ -n "$INPUT_PLAN_DATE" ]]; then
-            plan_date="$INPUT_PLAN_DATE"
-            request_id="github-actions-manual-${plan_date}-${GITHUB_RUN_ID}"
-          else
-            plan_date="$(TZ=Europe/Istanbul date +%F)"
-            request_id="github-actions-${plan_date}"
-          fi
-          if [[ ! "$plan_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
-            echo "plan_date must use YYYY-MM-DD format" >&2
-            exit 1
-          fi
-
+          request_id="github-actions-monitor-$(TZ=Europe/Istanbul date +%Y%m%d-%H%M)"
           response_file="$(mktemp)"
           trap 'rm -f "$response_file"' EXIT
+
+          if [[ -n "$INPUT_OBSERVED_AT" ]]; then
+            if [[ ! "$INPUT_OBSERVED_AT" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(Z|[+-][0-9]{2}:[0-9]{2})$ ]]; then
+              echo "observed_at must be an ISO timestamp with a timezone" >&2
+              exit 1
+            fi
+            request_body="{\"observed_at\":\"${INPUT_OBSERVED_AT}\",\"request_id\":\"${request_id}\"}"
+          else
+            request_body="{\"request_id\":\"${request_id}\"}"
+          fi
 
           http_status="$(curl \
             --silent \
@@ -67,13 +66,13 @@ jobs:
             --request POST \
             --header "Content-Type: application/json" \
             --header "X-Internal-Api-Key: ${INTERNAL_API_KEY}" \
-            --data "{\"plan_date\":\"${plan_date}\",\"request_id\":\"${request_id}\"}" \
-            "${API_URL}/v1/internal/scheduler/daily-plan")"
+            --data "$request_body" \
+            "${API_URL}/v1/internal/scheduler/task-monitor")"
 
           if [[ ! "$http_status" =~ ^2[0-9]{2}$ ]]; then
-            echo "Daily plan trigger failed with HTTP ${http_status}" >&2
+            echo "Task monitor failed with HTTP ${http_status}" >&2
             sed -n '1,20p' "$response_file" >&2
             exit 1
           fi
 
-          echo "Daily plan trigger accepted for ${plan_date} (HTTP ${http_status})."
+          echo "Task monitor cycle accepted (HTTP ${http_status})."

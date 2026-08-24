@@ -20,8 +20,9 @@ written. Always review both providers' current plan screens before creating reso
   uses the platform's free-tier shutdown behavior.
 - This topology has no uptime SLA, high-availability guarantee, private network, or
   always-on background worker.
-- Automated daily planning is deferred. Telegram-triggered workflows and durable history
-  remain available after the service wakes.
+- GitHub Actions wakes the service for daily planning and 15-minute task-monitor cycles.
+  Scheduled delivery is therefore approximate and can be delayed by the workflow queue or
+  a Render cold start; persistent idempotency prevents duplicate controls after retries.
 
 These are deployment-tier constraints, not changes to the LangGraph architecture. A later
 paid deployment can restore always-on execution and move migrations back to a dedicated
@@ -69,3 +70,8 @@ the configured secret-token header, drop stale pending updates, and verify
 
 Add Notion and OpenAI credentials later from Render's **Environment** page. Keeping them
 outside the first deployment isolates failures to the database and Telegram boundaries.
+
+After Notion is configured, enable both repository workflows. They reuse the existing
+`RENDER_INTERNAL_API_KEY` secret: **Daily Notion plan** imports the day at 07:35 Istanbul
+time and **Notion task monitor** checks the approved plan every 15 minutes. No additional
+Render worker or paid cron service is required.

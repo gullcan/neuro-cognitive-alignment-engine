@@ -37,6 +37,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from neuro_alignment.domain import (
+    DOMAIN_EVENT_TO_ACTION,
     BehaviorEvidence,
     DailyPlan,
     DailyPlanItem,
@@ -45,6 +46,7 @@ from neuro_alignment.domain import (
     OutboundMessage,
     SimilarBehaviorEpisode,
     TaskAction,
+    TaskDayActivity,
 )
 from neuro_alignment.memory import BEHAVIOR_VECTOR_DIMENSIONS, cosine_similarity
 
@@ -379,6 +381,47 @@ class EventRepository:
             has_sufficient_history=resolved_events >= 3,
         )
 
+    async def task_activity_for_period(
+        self,
+        *,
+        user_id: str,
+        task_ids: Sequence[str],
+        period_start: datetime,
+        period_end: datetime,
+    ) -> dict[str, TaskDayActivity]:
+        """Return the latest self-reported state for each task in one local day."""
+        if not task_ids:
+            return {}
+        async with self.database.session() as session:
+            rows = (
+                await session.scalars(
+                    select(DomainEventRecord)
+                    .where(
+                        DomainEventRecord.user_id == user_id,
+                        DomainEventRecord.task_id.in_(task_ids),
+                        DomainEventRecord.event_type.in_(DOMAIN_EVENT_TO_ACTION),
+                        DomainEventRecord.occurred_at >= period_start,
+                        DomainEventRecord.occurred_at < period_end,
+                    )
+                    .order_by(DomainEventRecord.occurred_at)
+                )
+            ).all()
+
+        activities: dict[str, TaskDayActivity] = {}
+        for row in rows:
+            if row.task_id is None:
+                continue
+            existing = activities.get(row.task_id)
+            counts = dict(existing.counts) if existing else {}
+            counts[row.event_type] = counts.get(row.event_type, 0) + 1
+            activities[row.task_id] = TaskDayActivity(
+                task_id=row.task_id,
+                latest_action=DOMAIN_EVENT_TO_ACTION[row.event_type],
+                latest_action_at=self._as_utc(row.occurred_at),
+                counts=counts,
+            )
+        return activities
+
     async def _get_inbound(
         self,
         session: AsyncSession,
@@ -526,7 +569,8 @@ class PlanRepository:
         status: str = "pending",
     ) -> str:
         now = utc_now()
-        approval_token = hashlib.sha256(thread_id.encode()).hexdigest()[:20]
+        plan_fingerprint = plan.model_dump_json()
+        approval_token = hashlib.sha256(f"{thread_id}:{plan_fingerprint}".encode()).hexdigest()[:20]
         async with self.database.session() as session, session.begin():
             record = await session.scalar(
                 select(DailyPlanRecord).where(
@@ -628,6 +672,23 @@ class PlanRepository:
             record.status,
             DailyPlan.model_validate(record.plan),
         )
+
+    async def approved_plan(
+        self,
+        user_id: str,
+        plan_date: date,
+    ) -> tuple[str, DailyPlan] | None:
+        async with self.database.session() as session:
+            record = await session.scalar(
+                select(DailyPlanRecord).where(
+                    DailyPlanRecord.user_id == user_id,
+                    DailyPlanRecord.plan_date == plan_date,
+                    DailyPlanRecord.status == "approved",
+                )
+            )
+        if record is None:
+            return None
+        return record.approval_token, DailyPlan.model_validate(record.plan)
 
 
 class OutboxRepository:

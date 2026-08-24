@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     outbox_max_attempts: int = Field(default=5, ge=1, le=20)
     outbox_lease_seconds: int = Field(default=120, ge=10, le=3600)
 
+    task_start_grace_minutes: int = Field(default=15, ge=5, le=120)
+    task_progress_default_minutes: int = Field(default=30, ge=5, le=240)
+    blocked_follow_up_minutes: int = Field(default=30, ge=5, le=240)
+    day_recovery_hour: int = Field(default=20, ge=0, le=23)
+    day_summary_hour: int = Field(default=23, ge=0, le=23)
+
     openai_api_key: SecretStr | None = None
     openai_model: str = "gpt-5.6-terra"
 
