@@ -58,61 +58,50 @@ class NotionClient:
         assert token is not None
         assert self.settings.notion_data_source_id is not None
 
-        response = await self.http_client.post(
-            (f"https://api.notion.com/v1/data_sources/{self.settings.notion_data_source_id}/query"),
-            headers={
-                "Authorization": f"Bearer {token.get_secret_value()}",
-                "Notion-Version": self.settings.notion_api_version,
-                "Content-Type": "application/json",
-            },
-            json={
-                "filter": {
-                    "and": [
-                        {
-                            "property": "Window",
-                            "date": {"equals": target_date.isoformat()},
-                        },
-                        {
-                            "property": "Status",
-                            "status": {"does_not_equal": "Archived"},
-                        },
-                    ]
-                },
-                "sorts": [
-                    {"property": "Window", "direction": "ascending"},
-                    {"property": "Priority", "direction": "ascending"},
-                ],
-                "page_size": 100,
-            },
+        endpoint = (
+            f"https://api.notion.com/v1/data_sources/{self.settings.notion_data_source_id}/query"
         )
+        headers = {
+            "Authorization": f"Bearer {token.get_secret_value()}",
+            "Notion-Version": self.settings.notion_api_version,
+            "Content-Type": "application/json",
+        }
+        query = self._daily_query(target_date)
+        response = await self.http_client.post(endpoint, headers=headers, json=query)
         response.raise_for_status()
         payload = response.json()
         tasks = [self._parse_page(page, target_date) for page in payload.get("results", [])]
 
         while payload.get("has_more") and payload.get("next_cursor"):
-            response = await self.http_client.post(
-                (
-                    "https://api.notion.com/v1/data_sources/"
-                    f"{self.settings.notion_data_source_id}/query"
-                ),
-                headers={
-                    "Authorization": f"Bearer {token.get_secret_value()}",
-                    "Notion-Version": self.settings.notion_api_version,
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "filter": {
-                        "property": "Window",
-                        "date": {"equals": target_date.isoformat()},
-                    },
-                    "start_cursor": payload["next_cursor"],
-                    "page_size": 100,
-                },
-            )
+            next_query = {**query, "start_cursor": payload["next_cursor"]}
+            response = await self.http_client.post(endpoint, headers=headers, json=next_query)
             response.raise_for_status()
             payload = response.json()
             tasks.extend(self._parse_page(page, target_date) for page in payload.get("results", []))
         return tasks
+
+    @staticmethod
+    def _daily_query(target_date: date) -> dict[str, Any]:
+        """Build one immutable query contract reused across every result page."""
+        return {
+            "filter": {
+                "and": [
+                    {
+                        "property": "Window",
+                        "date": {"equals": target_date.isoformat()},
+                    },
+                    {
+                        "property": "Status",
+                        "status": {"does_not_equal": "Archived"},
+                    },
+                ]
+            },
+            "sorts": [
+                {"property": "Window", "direction": "ascending"},
+                {"property": "Priority", "direction": "ascending"},
+            ],
+            "page_size": 100,
+        }
 
     def _parse_page(self, page: dict[str, Any], target_date: date) -> NotionTask:
         properties = page.get("properties", {})
