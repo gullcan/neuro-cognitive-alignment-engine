@@ -1,0 +1,74 @@
+name: Daily Notion plan
+
+on:
+  schedule:
+    - cron: "35 7 * * *"
+      timezone: "Europe/Istanbul"
+  workflow_dispatch:
+    inputs:
+      plan_date:
+        description: "Optional plan date (YYYY-MM-DD); defaults to today in Istanbul"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-notion-plan
+  cancel-in-progress: false
+
+jobs:
+  trigger-daily-plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      API_URL: "https://neuro-cognitive-alignment-engine.onrender.com"
+      INTERNAL_API_KEY: ${{ secrets.RENDER_INTERNAL_API_KEY }}
+      INPUT_PLAN_DATE: ${{ inputs.plan_date }}
+    steps:
+      - name: Validate configuration
+        shell: bash
+        run: |
+          if [[ -z "$INTERNAL_API_KEY" ]]; then
+            echo "Missing repository secret: RENDER_INTERNAL_API_KEY" >&2
+            exit 1
+          fi
+
+      - name: Trigger idempotent daily plan
+        shell: bash
+        run: |
+          plan_date="${INPUT_PLAN_DATE:-$(TZ=Europe/Istanbul date +%F)}"
+          if [[ ! "$plan_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            echo "plan_date must use YYYY-MM-DD format" >&2
+            exit 1
+          fi
+
+          request_id="github-actions-${plan_date}"
+          response_file="$(mktemp)"
+          trap 'rm -f "$response_file"' EXIT
+
+          http_status="$(curl \
+            --silent \
+            --show-error \
+            --location \
+            --retry 4 \
+            --retry-all-errors \
+            --retry-delay 15 \
+            --connect-timeout 30 \
+            --max-time 240 \
+            --output "$response_file" \
+            --write-out "%{http_code}" \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --header "X-Internal-Api-Key: ${INTERNAL_API_KEY}" \
+            --data "{\"plan_date\":\"${plan_date}\",\"request_id\":\"${request_id}\"}" \
+            "${API_URL}/v1/internal/scheduler/daily-plan")"
+
+          if [[ ! "$http_status" =~ ^2[0-9]{2}$ ]]; then
+            echo "Daily plan trigger failed with HTTP ${http_status}" >&2
+            sed -n '1,20p' "$response_file" >&2
+            exit 1
+          fi
+
+          echo "Daily plan trigger accepted for ${plan_date} (HTTP ${http_status})."

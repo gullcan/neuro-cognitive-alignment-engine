@@ -100,6 +100,12 @@ Runtime entry points are deliberately separated by trust boundary:
 - `POST /v1/internal/outbox/deliver` requires `X-Internal-Api-Key` and delivers one
   leased Telegram batch.
 
+The repository also includes a zero-cost GitHub Actions scheduler. It triggers the daily
+Notion planning endpoint at 07:35 in `Europe/Istanbul`, supports manual runs, and uses a
+deterministic daily request ID so repeated invocations remain idempotent. Configure the
+repository secret `RENDER_INTERNAL_API_KEY` with the same value as Render's
+`INTERNAL_API_KEY`; the secret is never stored in the workflow file.
+
 When Telegram delivery is enabled, workflow requests attempt an outbox delivery after
 processing. Failed records are retried up to `OUTBOX_MAX_ATTEMPTS`, and then moved to the
 `dead` state. PostgreSQL workers use row locking with `SKIP LOCKED`; a delivery lease also
