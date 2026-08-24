@@ -16,6 +16,7 @@ from neuro_alignment.domain import (
     BehaviorEvidence,
     CritiqueResult,
     DailyPlan,
+    DailyPlanItem,
     DomainEventType,
     InboundEventType,
     InlineButton,
@@ -316,7 +317,7 @@ class WorkflowEngine:
         )
         if resolved is None:
             raise LookupError("Plan approval token is invalid or expired.")
-        _plan_thread_id, plan_date, current_status = resolved
+        _plan_thread_id, plan_date, current_status, plan = resolved
         status = "approved" if action == TaskAction.PLAN_APPROVED else "rejected"
         if current_status not in {"pending", status}:
             raise WorkflowInputError(
@@ -346,19 +347,76 @@ class WorkflowEngine:
                 if status == "approved"
                 else "Plan reddedildi. Yeni plan oluşturulmadan taahhüt seti aktif sayılmayacak."
             )
-            queued = await self.dependencies.outbox.enqueue(
-                [
-                    OutboundMessage(
-                        idempotency_key=f"plan-decision:{event.event_id}",
+            messages = [
+                OutboundMessage(
+                    idempotency_key=f"plan-decision:{approval_token}:{status}",
+                    chat_id=chat_id,
+                    text=decision_text,
+                )
+            ]
+            if status == "approved":
+                messages.extend(
+                    self._task_control_message(
                         chat_id=chat_id,
-                        text=decision_text,
+                        approval_token=approval_token,
+                        item=item,
                     )
-                ]
-            )
+                    for item in plan.items
+                )
+            queued = await self.dependencies.outbox.enqueue(messages)
         return {
             "queued_messages": queued,
             "status": f"plan_{status}",
         }
+
+    @staticmethod
+    def _task_control_message(
+        *,
+        chat_id: str,
+        approval_token: str,
+        item: DailyPlanItem,
+    ) -> OutboundMessage:
+        definition = item.definition_of_done or "Somut tamamlanma kanıtını bildir."
+        minimum_action = item.minimum_action or "İlk fiziksel adımı belirle ve başlat."
+        return OutboundMessage(
+            idempotency_key=f"plan-task:{approval_token}:{item.task_id}",
+            chat_id=chat_id,
+            text=(
+                f"AKTİF TAAHHÜT {item.order}\n"
+                f"{item.title}\n\n"
+                f"Minimum eylem: {minimum_action}\n"
+                f"Tamamlanma kanıtı: {definition}\n\n"
+                "Durumu yalnızca gözlenebilir eylemine göre seç."
+            ),
+            buttons=[
+                [
+                    InlineButton(
+                        text="Başlattım",
+                        callback_data=f"task:started:{item.task_id}",
+                    ),
+                    InlineButton(
+                        text="Tamamladım",
+                        callback_data=f"task:completed:{item.task_id}",
+                    ),
+                ],
+                [
+                    InlineButton(
+                        text="Engellendim",
+                        callback_data=f"task:blocked:{item.task_id}",
+                    ),
+                    InlineButton(
+                        text="Atladım",
+                        callback_data=f"task:skipped:{item.task_id}",
+                    ),
+                ],
+                [
+                    InlineButton(
+                        text="Erteledim",
+                        callback_data=f"task:rescheduled:{item.task_id}",
+                    )
+                ],
+            ],
+        )
 
     async def _record_behavior(self, state: WorkflowState) -> StateUpdate:
         event = self._event(state)

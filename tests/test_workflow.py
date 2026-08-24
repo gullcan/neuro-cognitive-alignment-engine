@@ -96,7 +96,16 @@ async def test_daily_plan_is_persisted_queued_and_idempotent(tmp_path: Path) -> 
 
 @pytest.mark.asyncio
 async def test_plan_approval_follows_its_own_deterministic_branch(tmp_path: Path) -> None:
-    async with build_runtime(tmp_path, tasks=[]) as runtime:
+    task = NotionTask(
+        page_id="notion-task-approval",
+        title="Onaylanan görevi başlat",
+        scheduled_date=date(2026, 8, 5),
+        commitment_tier="Core",
+        priority="P1",
+        definition_of_done="Davranış düğmeleri görünür",
+        minimum_action="Başlattım düğmesine bas",
+    )
+    async with build_runtime(tmp_path, tasks=[task]) as runtime:
         plan_event = make_event(
             event_id="plan-request-1",
             event_type=InboundEventType.DAILY_PLAN_REQUESTED,
@@ -118,9 +127,19 @@ async def test_plan_approval_follows_its_own_deterministic_branch(tmp_path: Path
 
         assert result.status == "plan_approved"
         assert result.thread_id == f"plan-decision:owner:{token}"
-        assert result.queued_messages == 1
+        assert result.queued_messages == 2
         assert await runtime.plans.resolve_approval_token("owner", token) is None
-        assert len(await runtime.outbox.pending()) == 2
+        messages = [message for _record_id, message in await runtime.outbox.pending()]
+        assert len(messages) == 3
+        task_message = messages[-1]
+        assert "AKTİF TAAHHÜT 1" in task_message.text
+        assert "Onaylanan görevi başlat" in task_message.text
+        assert [[button.text for button in row] for row in task_message.buttons] == [
+            ["Başlattım", "Tamamladım"],
+            ["Engellendim", "Atladım"],
+            ["Erteledim"],
+        ]
+        assert task_message.buttons[0][0].callback_data == ("task:started:notion-task-approval")
 
 
 @pytest.mark.asyncio

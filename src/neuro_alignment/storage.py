@@ -458,7 +458,7 @@ class PlanRepository:
         self,
         user_id: str,
         approval_token: str,
-    ) -> tuple[str, date, str] | None:
+    ) -> tuple[str, date, str, DailyPlan] | None:
         """Resolve a plan decision even after a retry has already changed its status."""
         async with self.database.session() as session:
             record = await session.scalar(
@@ -469,7 +469,12 @@ class PlanRepository:
             )
         if record is None:
             return None
-        return record.thread_id, record.plan_date, record.status
+        return (
+            record.thread_id,
+            record.plan_date,
+            record.status,
+            DailyPlan.model_validate(record.plan),
+        )
 
 
 class OutboxRepository:
