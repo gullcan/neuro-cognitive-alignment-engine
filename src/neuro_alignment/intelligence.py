@@ -136,29 +136,62 @@ class RuleBasedIntelligenceProvider:
             )
 
         if action == TaskAction.COMPLETED:
-            gap = f"'{task_title}' için verilen söz davranışla kapatıldı."
+            gap = f"Verdiğin sözü tuttun: '{task_title}' tamamlandı."
+            completion_label = "ilk" if completed <= 1 else f"{completed}."
             intervention = (
-                "Tamamlanmayı hangi başlangıç ipucunun mümkün kıldığını tek cümleyle kaydet."
+                "Kendine güvenmek için gereken kanıtı sen ürettin; bu, kayıtlardaki "
+                f"{completion_label} somut tamamlaman."
             )
-            request = "Görevin kanıtını veya oluşan çıktıyı paylaş."
+            request = (
+                "Çıktıyı paylaş ve başlamanı sağlayan ipucunu tek cümleyle kaydet; "
+                "aynı ipucunu yeniden kullan."
+            )
         elif action == TaskAction.STARTED:
-            gap = f"'{task_title}' için niyet artık gözlenebilir bir başlangıca dönüştü."
-            intervention = "Minimum Action üzerinde 12 dakika kesintisiz çalış."
-            request = "12 dakika sonunda tamamlandı veya engellendi durumunu seç."
+            gap = f"'{task_title}' için niyet bitti; davranış başladı."
+            intervention = (
+                "Disiplin, doğru duyguyu beklemek değil, başladığın küçük eylemi "
+                "sürdürmektir: Minimum Action üzerinde şimdi 12 dakika kesintisiz çalış."
+            )
+            request = "Süre bitince sonucu 'Tamamladım' veya 'Engellendim' olarak bildir."
         elif action == TaskAction.BLOCKED:
             gap = f"'{task_title}' için söz–eylem zinciri şu anda engel noktasında duruyor."
             intervention = (
-                "Engeli 'belirsizlik', 'dış bağımlılık' veya 'başlangıç direnci' olarak "
-                "sınıflandır ve yapılabilecek en küçük fiziksel adımı başlat."
+                "Engel son karar değil, çözülecek veridir: onu 'belirsizlik', "
+                "'dış bağımlılık' veya 'başlangıç direnci' olarak sınıflandır ve "
+                "yapılabilecek en küçük fiziksel adımı şimdi başlat."
             )
             request = "Engelin türünü ve attığın ilk adımı yaz."
-        else:
-            gap = f"'{task_title}' için planlanan eylem gerçekleşmedi veya öteleniyor."
+        elif action == TaskAction.SKIPPED:
+            avoidance_count = skipped + rescheduled
+            history = (
+                f" Bu görevdeki atlama/erteleme kaydı {avoidance_count}'e çıktı; "
+                "bu sayı kimliğin değil, değiştireceğin döngünün kanıtı."
+                if avoidance_count >= 2
+                else ""
+            )
+            gap = f"'{task_title}' bugün atlandı; söz–eylem açığı açık kaldı.{history}"
             intervention = (
-                "Yeni zaman vermeden önce 10 dakikalık Minimum Action'ı şimdi uygula; "
-                "gerçek bir dış engel varsa onu somutlaştır."
+                "Bunu bir kimlik yargısına çevirmek yerine bir sonraki seçimi değiştir: "
+                "yeni tarih vermeden önce 10 dakikalık Minimum Action'ı şimdi uygula."
             )
             request = "10 dakika sonra yapılan işi veya doğrulanabilir engeli bildir."
+        else:
+            avoidance_count = skipped + rescheduled
+            history = (
+                f" Bu görevdeki atlama/erteleme kaydı {avoidance_count}'e çıktı; "
+                "bu sayı kimliğin değil, değiştireceğin döngünün kanıtı."
+                if avoidance_count >= 2
+                else ""
+            )
+            gap = (
+                f"'{task_title}' yeniden planlandı; tarih değişti ama verilen söz henüz "
+                f"davranışla kapanmadı.{history}"
+            )
+            intervention = (
+                "Yeni tarihi kaçışa değil uygulanabilirliğe dönüştür: ilk 10 dakikalık "
+                "Minimum Action'ı şimdi tamamla."
+            )
+            request = "Yaptığın somut işi ve yeni tarih için belirlediğin başlangıç ipucunu yaz."
 
         return NeuroFeedback(
             observed_evidence=(
@@ -292,6 +325,11 @@ Required behavior:
   pattern can yet be concluded.
 - State the word-action gap directly without generic praise or reassurance.
 - Give one immediate action that can be executed now and one evidence request.
+- Make word_action_gap, immediate_intervention, and evidence_request form one concise,
+  vivid Turkish paragraph when joined in that order. Use plain language and no headings.
+- Support autonomy and competence: connect confidence to the user's own observable action,
+  not to praise, approval, obedience, or attachment to the assistant.
+- Prefer a concrete cue-action or if-then plan over abstract motivation.
 - Neuro context may explain learning, prediction, cognitive control, and habit
   mechanisms only in calibrated general language.
 
@@ -299,6 +337,7 @@ Forbidden:
 - Claims that the system measured dopamine, receptor density, executive dysfunction,
   prefrontal cortex strength, neuroplastic change, or any clinical condition.
 - Shame, humiliation, threats, dependency language, or claims that the user is weak.
+- Covert manipulation, guaranteed transformation, or promises to raise dopamine.
 - Fabricated counts, causes, memories, or certainty.
 
 Incorporate critique_notes when present. Return only the required structured output.

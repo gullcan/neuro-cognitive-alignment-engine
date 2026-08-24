@@ -529,9 +529,12 @@ class WorkflowEngine:
             )
         ).casefold()
         forbidden_claims = {
+            "bana ihtiyacın var",
             "dopamin seviyeni ölçtüm",
+            "dopaminini yükselteceğim",
             "dopamin reseptörlerin zayıf",
             "prefrontal korteksin güçlendi",
+            "sadece benim onayım",
             "yürütücü işlev bozukluğun var",
             "sende adhd var",
             "klinik tanın",
@@ -719,16 +722,9 @@ class WorkflowEngine:
 
     @staticmethod
     def _format_feedback(feedback: NeuroFeedback) -> str:
-        text = "\n\n".join(
-            (
-                f"GÖZLENEN KANIT\n{feedback.observed_evidence}",
-                f"DAVRANIŞ ÖRÜNTÜSÜ\n{feedback.behavioral_pattern}",
-                f"YORUM SINIRI\n{feedback.interpretation}",
-                f"NÖRO-BİLİŞSEL BAĞLAM\n{feedback.neuro_context}",
-                f"SÖZ–EYLEM AÇIĞI\n{feedback.word_action_gap}",
-                f"ŞİMDİKİ MÜDAHALE\n{feedback.immediate_intervention}",
-                f"KANIT İSTEĞİ\n{feedback.evidence_request}",
-                f"Takip: {feedback.follow_up_minutes} dakika · Güven: {feedback.confidence:.0%}",
-            )
+        public_parts = (
+            feedback.word_action_gap,
+            feedback.immediate_intervention,
+            feedback.evidence_request,
         )
-        return text[:4096]
+        return " ".join(" ".join(part.split()) for part in public_parts)

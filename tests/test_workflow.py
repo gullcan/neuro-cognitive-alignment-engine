@@ -220,8 +220,48 @@ async def test_behavior_feedback_uses_evidence_and_keeps_threads_isolated(
 
         messages = [message for _record_id, message in await runtime.outbox.pending()]
         assert len(messages) == 2
-        assert all("GÖZLENEN KANIT" in message.text for message in messages)
-        assert all("NÖRO-BİLİŞSEL BAĞLAM" in message.text for message in messages)
+        assert all("GÖZLENEN KANIT" not in message.text for message in messages)
+        assert all("NÖRO-BİLİŞSEL BAĞLAM" not in message.text for message in messages)
+        assert all("\n" not in message.text for message in messages)
+        assert all(len(message.text) <= 902 for message in messages)
+        assert "niyet bitti; davranış başladı" in messages[0].text
+        assert "Kendine güvenmek için gereken kanıtı sen ürettin" in messages[1].text
+
+        internal_feedback = NeuroFeedback.model_validate(second_snapshot.values["feedback"])
+        assert "Güncel davranış olayı" in internal_feedback.observed_evidence
+        assert "öğrenme süreçlerini" in internal_feedback.neuro_context
+
+
+@pytest.mark.asyncio
+async def test_skipped_feedback_is_short_personalized_and_actionable() -> None:
+    provider = RuleBasedIntelligenceProvider()
+    feedback = await provider.generate_feedback(
+        event=make_event(
+            event_id="telegram-task-skipped",
+            event_type=InboundEventType.TELEGRAM_ACTION,
+            source=EventSource.TELEGRAM,
+            task_id="task-skipped",
+            action=TaskAction.SKIPPED,
+            payload={"chat_id": "12345", "task_title": "Notion entegrasyonunu doğrula"},
+        ),
+        task_title="Notion entegrasyonunu doğrula",
+        evidence=BehaviorEvidence(
+            task_id="task-skipped",
+            total_events=6,
+            counts={"task.completed": 1, "task.skipped": 1, "task.rescheduled": 3},
+            has_sufficient_history=True,
+        ),
+        critique_notes=[],
+    )
+
+    message = WorkflowEngine._format_feedback(feedback)
+
+    assert "atlama/erteleme kaydı 4'e çıktı" in message
+    assert "10 dakikalık Minimum Action'ı şimdi uygula" in message
+    assert "doğrulanabilir engeli bildir" in message
+    assert "\n" not in message
+    assert "GÖZLENEN KANIT" not in message
+    assert len(message) <= 902
 
 
 @pytest.mark.asyncio

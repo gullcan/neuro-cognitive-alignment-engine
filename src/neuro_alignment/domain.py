@@ -159,10 +159,10 @@ class NeuroFeedback(BaseModel):
     behavioral_pattern: str
     interpretation: str
     neuro_context: str
-    word_action_gap: str
-    immediate_intervention: str
+    word_action_gap: str = Field(min_length=1, max_length=320)
+    immediate_intervention: str = Field(min_length=1, max_length=360)
     follow_up_minutes: int = Field(ge=1, le=1440)
-    evidence_request: str
+    evidence_request: str = Field(min_length=1, max_length=220)
     confidence: float = Field(ge=0, le=1)
     evidence_refs: list[str] = Field(default_factory=list)
 

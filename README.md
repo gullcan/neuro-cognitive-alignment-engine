@@ -131,3 +131,9 @@ free-tier constraints, secret-handling boundary, and Telegram activation gate.
 ## Safety Boundary
 
 Behavioral observations, user reports, statistical patterns, model hypotheses, and general neuroscience explanations are treated as separate evidence levels. Model-generated hypotheses must never be stored or presented as measured biological facts.
+
+The engine retains that structured evidence and safety review internally. Telegram receives
+only a short, single-paragraph projection: the current word-action gap, one immediately
+executable step, and one evidence request. The message supports autonomy and ties confidence
+to the user's observable actions; it does not promise dopamine changes, use covert
+manipulation, or cultivate dependence on the assistant's approval.
