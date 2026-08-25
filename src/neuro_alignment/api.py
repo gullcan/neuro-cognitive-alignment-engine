@@ -140,6 +140,7 @@ def create_app(
                 environment=configured_settings.app_env,
                 version=__version__,
                 checkpoint_backend=configured_settings.checkpoint_backend,
+                intelligence_provider=type(services.intelligence).__name__,
             )
             yield
         finally:

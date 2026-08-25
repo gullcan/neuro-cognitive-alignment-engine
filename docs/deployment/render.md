@@ -49,11 +49,12 @@ Render form asks for the database URL only once.
 1. Sign in to Render and open **New > Blueprint**.
 2. Select `gullcan/neuro-cognitive-alignment-engine`.
 3. Confirm that the web service plan is **Free** and that no Render database is listed.
-4. Supply the four prompted values:
+4. Supply the five prompted values:
    - `DATABASE_URL`: the direct Neon connection string;
    - `TELEGRAM_BOT_TOKEN`: from the local `.env` file;
    - `TELEGRAM_WEBHOOK_SECRET`: from the local `.env` file;
    - `TELEGRAM_CHAT_ID`: from the local `.env` file.
+   - `GROQ_API_KEY`: a Groq Cloud free-tier API key used only for LLM-written guidance.
 5. Apply the Blueprint and wait for the deploy to finish.
 6. Open the service URL ending in `/health/ready`. Continue only when it returns
    `"status": "ok"` and both checks are `"ok"`.
@@ -68,10 +69,19 @@ Creating the service does not register the Telegram webhook. Register
 the configured secret-token header, drop stale pending updates, and verify
 `getWebhookInfo` before sending the first live update.
 
+## LLM provider
+
+Create a Groq Cloud API key without enabling the paid Developer tier, then add it as
+`GROQ_API_KEY` in Render's **Environment** page. The key activates structured LLM-written
+planning and behavioral guidance after the next deploy. `openai/gpt-oss-20b` is selected
+by the Blueprint. If the free quota is exhausted or the provider is temporarily
+unavailable, the application automatically uses its local guidance provider instead of
+dropping the Telegram interaction.
+
 ## Deferred integrations
 
-Add Notion and OpenAI credentials later from Render's **Environment** page. Keeping them
-outside the first deployment isolates failures to the database and Telegram boundaries.
+An OpenAI key remains an optional alternative. Provider credentials stay outside Git and
+are read only from Render environment variables.
 
 After Notion is configured, enable both repository workflows. They reuse the existing
 `RENDER_INTERNAL_API_KEY` secret: **Daily Notion plan** imports the day at 07:35 Istanbul

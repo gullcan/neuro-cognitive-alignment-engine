@@ -5,6 +5,7 @@ import json
 from collections.abc import Sequence
 from typing import Protocol
 
+import structlog
 from openai import AsyncOpenAI
 
 from neuro_alignment.config import Settings
@@ -17,6 +18,8 @@ from neuro_alignment.domain import (
     NotionTask,
     TaskAction,
 )
+
+logger = structlog.get_logger()
 
 
 class IntelligenceProvider(Protocol):
@@ -215,16 +218,12 @@ class RuleBasedIntelligenceProvider:
         )
 
 
-class OpenAIIntelligenceProvider:
-    def __init__(self, settings: Settings) -> None:
-        if not settings.openai_api_key:
-            raise ValueError("OPENAI_API_KEY is required.")
-        self.model = settings.openai_model
-        self.client = AsyncOpenAI(
-            api_key=settings.openai_api_key.get_secret_value(),
-            max_retries=2,
-            timeout=45,
-        )
+class ResponsesIntelligenceProvider:
+    """Shared structured-output implementation for Responses-compatible APIs."""
+
+    def __init__(self, *, client: AsyncOpenAI, model: str) -> None:
+        self.model = model
+        self.client = client
 
     async def build_daily_plan(
         self,
@@ -299,6 +298,102 @@ class OpenAIIntelligenceProvider:
     @staticmethod
     def _safety_identifier(user_id: str) -> str:
         return hashlib.sha256(user_id.encode()).hexdigest()[:32]
+
+
+class OpenAIIntelligenceProvider(ResponsesIntelligenceProvider):
+    def __init__(self, settings: Settings) -> None:
+        if not settings.openai_api_key:
+            raise ValueError("OPENAI_API_KEY is required.")
+        super().__init__(
+            client=AsyncOpenAI(
+                api_key=settings.openai_api_key.get_secret_value(),
+                max_retries=2,
+                timeout=45,
+            ),
+            model=settings.openai_model,
+        )
+
+
+class GroqIntelligenceProvider(ResponsesIntelligenceProvider):
+    """Use Groq's OpenAI-compatible Responses API on the cardless free tier."""
+
+    def __init__(self, settings: Settings) -> None:
+        if not settings.groq_api_key:
+            raise ValueError("GROQ_API_KEY is required.")
+        super().__init__(
+            client=AsyncOpenAI(
+                api_key=settings.groq_api_key.get_secret_value(),
+                base_url="https://api.groq.com/openai/v1",
+                max_retries=2,
+                timeout=45,
+            ),
+            model=settings.groq_model,
+        )
+
+
+class ResilientIntelligenceProvider:
+    """Keep the workflow useful when a free external LLM is unavailable or rate-limited."""
+
+    def __init__(
+        self,
+        primary: IntelligenceProvider,
+        fallback: IntelligenceProvider,
+    ) -> None:
+        self.primary = primary
+        self.fallback = fallback
+
+    async def build_daily_plan(
+        self,
+        *,
+        tasks: Sequence[NotionTask],
+        plan_date: str,
+        user_id: str,
+    ) -> DailyPlan:
+        try:
+            return await self.primary.build_daily_plan(
+                tasks=tasks,
+                plan_date=plan_date,
+                user_id=user_id,
+            )
+        except Exception as error:
+            await logger.awarning(
+                "llm_daily_plan_fallback",
+                provider=type(self.primary).__name__,
+                error_type=type(error).__name__,
+            )
+            return await self.fallback.build_daily_plan(
+                tasks=tasks,
+                plan_date=plan_date,
+                user_id=user_id,
+            )
+
+    async def generate_feedback(
+        self,
+        *,
+        event: NormalizedInboundEvent,
+        task_title: str,
+        evidence: BehaviorEvidence,
+        critique_notes: list[str],
+    ) -> NeuroFeedback:
+        try:
+            return await self.primary.generate_feedback(
+                event=event,
+                task_title=task_title,
+                evidence=evidence,
+                critique_notes=critique_notes,
+            )
+        except Exception as error:
+            await logger.awarning(
+                "llm_feedback_fallback",
+                provider=type(self.primary).__name__,
+                error_type=type(error).__name__,
+            )
+            return await self.fallback.generate_feedback(
+                event=event,
+                task_title=task_title,
+                evidence=evidence,
+                critique_notes=critique_notes,
+            )
 
 
 DAILY_PLANNER_PROMPT = """

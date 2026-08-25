@@ -54,6 +54,8 @@ class Settings(BaseSettings):
 
     openai_api_key: SecretStr | None = None
     openai_model: str = "gpt-5.6-terra"
+    groq_api_key: SecretStr | None = None
+    groq_model: str = "openai/gpt-oss-20b"
 
     internal_api_key: SecretStr = Field(default=SecretStr("change-me"))
 
@@ -95,6 +97,7 @@ class Settings(BaseSettings):
         "telegram_bot_token",
         "telegram_webhook_secret",
         "openai_api_key",
+        "groq_api_key",
         mode="before",
     )
     @classmethod

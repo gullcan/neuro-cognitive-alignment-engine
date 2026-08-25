@@ -13,12 +13,14 @@ def test_empty_optional_secrets_are_normalized_to_none() -> None:
         telegram_bot_token="",
         telegram_webhook_secret="",
         openai_api_key="",
+        groq_api_key="",
     )
 
     assert settings.notion_api_token is None
     assert settings.telegram_bot_token is None
     assert settings.telegram_webhook_secret is None
     assert settings.openai_api_key is None
+    assert settings.groq_api_key is None
 
 
 def test_telegram_webhook_secret_rejects_unsupported_characters() -> None:

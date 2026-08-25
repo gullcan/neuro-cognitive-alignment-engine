@@ -9,7 +9,12 @@ from pytest import MonkeyPatch
 
 from neuro_alignment.api import create_app
 from neuro_alignment.config import Settings
-from neuro_alignment.intelligence import RuleBasedIntelligenceProvider
+from neuro_alignment.intelligence import (
+    GroqIntelligenceProvider,
+    ResilientIntelligenceProvider,
+    RuleBasedIntelligenceProvider,
+)
+from neuro_alignment.runtime import AppServices
 from neuro_alignment.storage import Database
 
 
@@ -44,6 +49,29 @@ async def test_health_endpoints_and_lifespan(tmp_path: Path) -> None:
 
     assert services.http_client.is_closed
     assert not hasattr(application.state, "services")
+
+
+@pytest.mark.asyncio
+async def test_groq_key_selects_resilient_llm_provider(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'groq-provider.db'}",
+        checkpoint_backend="memory",
+        groq_api_key="gsk-test-only",
+        openai_api_key=None,
+    )
+    services = AppServices.build(settings)
+
+    try:
+        assert isinstance(services.intelligence, ResilientIntelligenceProvider)
+        assert isinstance(services.intelligence.primary, GroqIntelligenceProvider)
+        assert isinstance(services.intelligence.fallback, RuleBasedIntelligenceProvider)
+        assert str(services.intelligence.primary.client.base_url) == (
+            "https://api.groq.com/openai/v1/"
+        )
+    finally:
+        await services.close()
 
 
 @pytest.mark.asyncio

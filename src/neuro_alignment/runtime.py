@@ -14,8 +14,10 @@ from neuro_alignment.integrations import (
     TelegramUpdateParser,
 )
 from neuro_alignment.intelligence import (
+    GroqIntelligenceProvider,
     IntelligenceProvider,
     OpenAIIntelligenceProvider,
+    ResilientIntelligenceProvider,
     RuleBasedIntelligenceProvider,
 )
 from neuro_alignment.storage import (
@@ -57,11 +59,18 @@ class AppServices:
             headers={"User-Agent": f"neuro-cognitive-alignment-engine/{__version__}"},
             timeout=httpx.Timeout(20.0, connect=5.0),
         )
-        intelligence: IntelligenceProvider
-        if settings.openai_api_key:
-            intelligence = OpenAIIntelligenceProvider(settings)
-        else:
-            intelligence = RuleBasedIntelligenceProvider()
+        local_intelligence = RuleBasedIntelligenceProvider()
+        intelligence: IntelligenceProvider = local_intelligence
+        if settings.groq_api_key:
+            intelligence = ResilientIntelligenceProvider(
+                GroqIntelligenceProvider(settings),
+                local_intelligence,
+            )
+        elif settings.openai_api_key:
+            intelligence = ResilientIntelligenceProvider(
+                OpenAIIntelligenceProvider(settings),
+                local_intelligence,
+            )
 
         return cls(
             settings=settings,

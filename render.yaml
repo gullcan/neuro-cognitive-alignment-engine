@@ -50,5 +50,9 @@ services:
         value: "20"
       - key: DAY_SUMMARY_HOUR
         value: "23"
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-20b
       - key: INTERNAL_API_KEY
         generateValue: true

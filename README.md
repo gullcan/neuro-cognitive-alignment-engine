@@ -1,7 +1,7 @@
 # Neuro-Cognitive Alignment Engine
 
 A stateful, evidence-aware intent-action alignment system built with LangGraph, FastAPI,
-PostgreSQL/pgvector, Notion, Telegram, and an optional OpenAI provider.
+PostgreSQL/pgvector, Notion, Telegram, and optional Groq/OpenAI LLM providers.
 
 ## Project Vision
 
@@ -30,7 +30,7 @@ The system is not a generic reminder bot and does not provide medical diagnosis 
 - Neon PostgreSQL with pgvector
 - Notion API
 - Telegram Bot API
-- OpenAI Responses API
+- Groq or OpenAI Responses API with structured outputs
 
 ## Development Status
 
@@ -69,6 +69,20 @@ LangGraph checkpoints and behavioral memory serve different purposes:
 Checkpoint backends are selected with `CHECKPOINT_BACKEND`: `memory` for tests, `sqlite`
 for local experiments, and `postgres` for the durable runtime. PostgreSQL checkpoint tables
 are managed by LangGraph and intentionally remain outside Alembic's operational schema.
+
+## LLM guidance
+
+The runtime selects Groq when `GROQ_API_KEY` is configured, otherwise OpenAI when
+`OPENAI_API_KEY` is configured, and finally the deterministic local provider. External
+providers are wrapped by a resilient fallback: timeouts, malformed responses, and
+free-tier rate limits are logged without secrets, then the same request is completed by the
+local provider. The LLM receives the current task event and retrieved behavioral evidence;
+it never controls scheduling, database writes, Telegram callbacks, or the Safety Critic.
+
+The zero-cost deployment uses Groq's OpenAI-compatible Responses API with
+`GROQ_MODEL=openai/gpt-oss-20b`. Store `GROQ_API_KEY` only in Render's Environment page.
+Task titles and the bounded behavioral context required to write feedback are sent to the
+selected LLM provider; API keys and infrastructure secrets are never included in prompts.
 
 ## Database migrations
 
