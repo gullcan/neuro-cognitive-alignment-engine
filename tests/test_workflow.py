@@ -123,6 +123,43 @@ async def test_empty_daily_plan_is_explained_without_approval_buttons(tmp_path: 
         assert message.buttons == []
         assert await runtime.plans.approved_plan("owner", date(2026, 8, 25)) is None
 
+        unchanged = await runtime.engine.process(
+            make_event(
+                event_id="empty-plan-poll-2026-08-25",
+                event_type=InboundEventType.DAILY_PLAN_REQUESTED,
+                source=EventSource.SCHEDULER,
+                payload={"plan_date": "2026-08-25"},
+            )
+        )
+        assert unchanged.status == "plan_unchanged"
+        assert unchanged.queued_messages == 0
+
+        runtime.notion.tasks = [
+            NotionTask(
+                page_id="late-notion-task",
+                title="Gün içinde eklenen görevi yakala",
+                scheduled_date=date(2026, 8, 25),
+                commitment_tier="Core",
+                priority="P1",
+                definition_of_done="Güncel plan Telegram'a geldi",
+                minimum_action="Güncel planı aç",
+            )
+        ]
+        refreshed = await runtime.engine.process(
+            make_event(
+                event_id="non-empty-plan-poll-2026-08-25",
+                event_type=InboundEventType.DAILY_PLAN_REQUESTED,
+                source=EventSource.SCHEDULER,
+                payload={"plan_date": "2026-08-25"},
+            )
+        )
+
+        assert refreshed.status == "plan_created"
+        assert refreshed.queued_messages == 1
+        refreshed_message = (await runtime.outbox.pending())[-1][1]
+        assert "Gün içinde eklenen görevi yakala" in refreshed_message.text
+        assert refreshed_message.buttons
+
 
 @pytest.mark.asyncio
 async def test_same_day_plan_refresh_gets_a_new_content_bound_approval_token(
@@ -149,8 +186,30 @@ async def test_same_day_plan_refresh_gets_a_new_content_bound_approval_token(
         first_message = (await runtime.outbox.pending())[-1][1]
         first_token = first_message.buttons[0][0].callback_data.rsplit(":", 1)[1]
 
-        runtime.notion.tasks = [original.model_copy(update={"title": "İkinci plan sürümü"})]
         await runtime.engine.process(
+            make_event(
+                event_id="plan-version-1-approval",
+                event_type=InboundEventType.TELEGRAM_ACTION,
+                source=EventSource.TELEGRAM,
+                action=TaskAction.PLAN_APPROVED,
+                payload={"approval_token": first_token, "chat_id": "12345"},
+            )
+        )
+        unchanged = await runtime.engine.process(
+            make_event(
+                event_id="plan-version-1-poll",
+                event_type=InboundEventType.DAILY_PLAN_REQUESTED,
+                source=EventSource.SCHEDULER,
+                payload={"plan_date": "2026-08-05"},
+            )
+        )
+
+        assert unchanged.status == "plan_unchanged"
+        assert unchanged.queued_messages == 0
+        assert await runtime.plans.approved_plan("owner", date(2026, 8, 5)) is not None
+
+        runtime.notion.tasks = [original.model_copy(update={"title": "İkinci plan sürümü"})]
+        changed = await runtime.engine.process(
             make_event(
                 event_id="plan-version-2",
                 event_type=InboundEventType.DAILY_PLAN_REQUESTED,
@@ -161,8 +220,23 @@ async def test_same_day_plan_refresh_gets_a_new_content_bound_approval_token(
         second_message = (await runtime.outbox.pending())[-1][1]
         second_token = second_message.buttons[0][0].callback_data.rsplit(":", 1)[1]
 
+        assert changed.status == "plan_created"
+        assert changed.queued_messages == 1
         assert first_token != second_token
         assert "İkinci plan sürümü" in second_message.text
+        assert await runtime.plans.approved_plan("owner", date(2026, 8, 5)) is None
+
+        unchanged_pending = await runtime.engine.process(
+            make_event(
+                event_id="plan-version-2-poll",
+                event_type=InboundEventType.DAILY_PLAN_REQUESTED,
+                source=EventSource.SCHEDULER,
+                payload={"plan_date": "2026-08-05"},
+            )
+        )
+
+        assert unchanged_pending.status == "plan_unchanged"
+        assert unchanged_pending.queued_messages == 0
 
 
 @pytest.mark.asyncio

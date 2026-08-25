@@ -20,7 +20,9 @@ written. Always review both providers' current plan screens before creating reso
   uses the platform's free-tier shutdown behavior.
 - This topology has no uptime SLA, high-availability guarantee, private network, or
   always-on background worker.
-- GitHub Actions wakes the service for daily planning and 15-minute task-monitor cycles.
+- GitHub Actions wakes the service for daily planning and 15-minute cycles that first sync
+  today's Notion plan and then monitor its approved tasks. Unchanged syncs remain silent;
+  changed plans require a fresh Telegram approval.
   Scheduled delivery is therefore approximate and can be delayed by the workflow queue or
   a Render cold start; persistent idempotency prevents duplicate controls after retries.
 

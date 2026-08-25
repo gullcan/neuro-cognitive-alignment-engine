@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections import Counter
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
@@ -567,10 +568,25 @@ class PlanRepository:
         plan: DailyPlan,
         thread_id: str,
         status: str = "pending",
-    ) -> str:
+    ) -> tuple[str, bool]:
+        """Persist a content-addressed plan and report whether its content changed.
+
+        A polling sync must not turn an unchanged, approved plan back into a pending
+        plan. The approval state changes only when the content-derived token changes.
+        """
         now = utc_now()
-        plan_fingerprint = plan.model_dump_json()
+        material_plan = {
+            "plan_date": plan.plan_date.isoformat(),
+            "items": [item.model_dump(mode="json", exclude={"rationale"}) for item in plan.items],
+        }
+        plan_fingerprint = json.dumps(
+            material_plan,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         approval_token = hashlib.sha256(f"{thread_id}:{plan_fingerprint}".encode()).hexdigest()[:20]
+        changed = True
         async with self.database.session() as session, session.begin():
             record = await session.scalar(
                 select(DailyPlanRecord).where(
@@ -594,11 +610,14 @@ class PlanRepository:
                 )
             else:
                 record.thread_id = thread_id
-                record.approval_token = approval_token
-                record.status = status
                 record.plan = plan.model_dump(mode="json")
                 record.updated_at = now
-        return approval_token
+                if record.approval_token == approval_token:
+                    changed = False
+                else:
+                    record.approval_token = approval_token
+                    record.status = status
+        return approval_token, changed
 
     async def update_status(self, user_id: str, plan_date: date, status: str) -> None:
         async with self.database.session() as session, session.begin():

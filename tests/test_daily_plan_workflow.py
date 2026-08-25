@@ -24,7 +24,10 @@ def test_task_monitor_workflow_runs_every_fifteen_minutes_with_same_secret() -> 
     assert 'timezone: "Europe/Istanbul"' in workflow
     assert "workflow_dispatch:" in workflow
     assert "secrets.RENDER_INTERNAL_API_KEY" in workflow
+    assert "/v1/internal/scheduler/daily-plan" in workflow
     assert "/v1/internal/scheduler/task-monitor" in workflow
+    assert 'sync_request_id="github-actions-sync-${cycle_id}"' in workflow
+    assert 'plan_date="$(TZ=Europe/Istanbul date +%F)"' in workflow
     assert "--retry-all-errors" in workflow
     assert "X-Internal-Api-Key: ${INTERNAL_API_KEY}" in workflow
     assert "change-me" not in workflow

@@ -61,6 +61,7 @@ class WorkflowState(TypedDict):
     tasks: list[dict[str, Any]]
     plan: dict[str, Any] | None
     approval_token: str | None
+    plan_changed: bool
     task_activity: dict[str, dict[str, Any]]
     evidence: dict[str, Any] | None
     behavior_context: dict[str, Any] | None
@@ -280,32 +281,39 @@ class WorkflowEngine:
     async def _persist_plan(self, state: WorkflowState) -> StateUpdate:
         event = self._event(state)
         plan = self._plan(state)
-        approval_token = await self.dependencies.plans.save(
+        approval_token, plan_changed = await self.dependencies.plans.save(
             event.user_id,
             plan,
             state["thread_id"],
         )
-        await self.dependencies.events.append_domain_event(
-            event_type=DomainEventType.PLAN_CREATED.value,
-            user_id=event.user_id,
-            task_id=None,
-            source=event.source.value,
-            occurred_at=event.occurred_at,
-            payload={
-                "inbound_event_id": event.event_id,
-                "plan_date": plan.plan_date.isoformat(),
-                "item_count": len(plan.items),
-                "thread_id": state["thread_id"],
-            },
-            idempotency_key=f"{event.source.value}:{event.event_id}:plan-created",
-        )
-        return {"approval_token": approval_token}
+        if plan_changed:
+            await self.dependencies.events.append_domain_event(
+                event_type=DomainEventType.PLAN_CREATED.value,
+                user_id=event.user_id,
+                task_id=None,
+                source=event.source.value,
+                occurred_at=event.occurred_at,
+                payload={
+                    "inbound_event_id": event.event_id,
+                    "plan_date": plan.plan_date.isoformat(),
+                    "item_count": len(plan.items),
+                    "thread_id": state["thread_id"],
+                },
+                idempotency_key=f"{event.source.value}:{event.event_id}:plan-created",
+            )
+        return {"approval_token": approval_token, "plan_changed": plan_changed}
 
     async def _queue_plan(self, state: WorkflowState) -> StateUpdate:
         event = self._event(state)
         chat_id = self._chat_id(event)
         plan = self._plan(state)
         queued = 0
+        if not state["plan_changed"]:
+            return {"queued_messages": 0, "status": "plan_unchanged"}
+
+        token = state["approval_token"]
+        if token is None:
+            raise RuntimeError("Plan approval token was not generated.")
         if not plan.items:
             await self.dependencies.plans.update_status(
                 event.user_id,
@@ -316,7 +324,7 @@ class WorkflowEngine:
                 queued = await self.dependencies.outbox.enqueue(
                     [
                         OutboundMessage(
-                            idempotency_key=f"daily-plan-empty:{event.event_id}",
+                            idempotency_key=f"daily-plan-empty:{event.user_id}:{token}",
                             chat_id=chat_id,
                             text=self._format_empty_plan(plan),
                         )
@@ -325,11 +333,8 @@ class WorkflowEngine:
             return {"queued_messages": queued, "status": "plan_empty"}
 
         if chat_id:
-            token = state["approval_token"]
-            if token is None:
-                raise RuntimeError("Plan approval token was not generated.")
             message = OutboundMessage(
-                idempotency_key=f"daily-plan:{event.event_id}",
+                idempotency_key=f"daily-plan:{event.user_id}:{token}",
                 chat_id=chat_id,
                 text=self._format_plan(plan),
                 buttons=[
@@ -892,6 +897,7 @@ class WorkflowEngine:
             tasks=[],
             plan=None,
             approval_token=None,
+            plan_changed=False,
             task_activity={},
             evidence=None,
             behavior_context=None,

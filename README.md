@@ -110,7 +110,10 @@ Runtime entry points are deliberately separated by trust boundary:
   leased Telegram batch.
 
 The repository also includes zero-cost GitHub Actions schedules. Daily planning runs at
-07:35 in `Europe/Istanbul`; the task monitor evaluates the approved plan every 15 minutes.
+07:35 in `Europe/Istanbul`; every 15-minute task-monitor cycle first refreshes today's
+Notion data and then evaluates the approved plan. An unchanged refresh stays silent and
+preserves the existing approval. New or edited tasks create exactly one updated plan that
+must be approved in Telegram before its reminder schedule becomes active.
 The monitor sends a due reminder, a missing-start check after the configured grace period,
 a progress check after the task's estimated duration, an obstacle follow-up, and evening
 completion summaries. Persistent outbox keys make every control idempotent. Configure the
@@ -119,9 +122,10 @@ repository secret `RENDER_INTERNAL_API_KEY` with the same value as Render's
 
 For time-aware monitoring, every Notion `Window` must include both a date and a start time.
 Tasks with only a date are exposed immediately after plan approval because no exact trigger
-time exists. Add normal tasks before the 07:35 import and approve the Telegram plan. If the
-Notion plan changes later, manually run **Daily Notion plan** for that date and approve the
-new version; its content-derived approval token isolates the new reminder schedule.
+time exists. Tasks added after the 07:35 import are discovered by the next 15-minute cycle;
+approve the single updated Telegram plan to activate their reminder schedule. The
+content-derived approval token isolates each real plan revision and prevents unchanged
+polls from sending duplicate messages.
 
 The engine observes Telegram button reports and persisted system events. It cannot directly
 detect whether the user physically started work, so an unanswered reminder is treated as
