@@ -17,8 +17,6 @@ neurological facts.
 
 - **Live API health:** [neuro-cognitive-alignment-engine.onrender.com/health/live](https://neuro-cognitive-alignment-engine.onrender.com/health/live)
 - **Architecture deep dive:** [docs/architecture.md](docs/architecture.md)
-- **Technology and interview guide (Turkish):**
-  [docs/technology-and-interview-guide.tr.md](docs/technology-and-interview-guide.tr.md)
 - **Render + Neon deployment:** [docs/deployment/render.md](docs/deployment/render.md)
 
 ## What it does
@@ -156,9 +154,6 @@ retrieval concern.
 | Quality | Ruff, strict mypy, pytest | Formatting, linting, type safety, behavioral tests |
 | Observability | structlog, health/readiness probes | Structured events and platform diagnostics |
 
-The detailed purpose and interview explanation for every technology is available in the
-[Turkish study guide](docs/technology-and-interview-guide.tr.md).
-
 ## Data model
 
 The application owns five operational tables:
@@ -257,6 +252,5 @@ These are explicit architectural boundaries, not hidden assumptions.
 ## Documentation
 
 - [Architecture and engineering decisions](docs/architecture.md)
-- [Technology and interview guide — Turkish](docs/technology-and-interview-guide.tr.md)
 - [Render + Neon deployment](docs/deployment/render.md)
 - [Database migration operations](migrations/README)
