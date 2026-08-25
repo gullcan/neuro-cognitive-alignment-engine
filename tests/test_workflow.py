@@ -438,13 +438,86 @@ async def test_text_checkin_is_recorded_and_receives_evidence_bounded_response(
 
         result = await runtime.engine.process(event)
 
-        assert result.status == "checkin_recorded"
+        assert result.status == "conversation_replied"
         assert result.queued_messages == 1
         pending = await runtime.outbox.pending()
         assert len(pending) == 1
         assert pending[0][1].chat_id == "12345"
         assert "Seni duydum" in pending[0][1].text
-        assert "yalnızca ilk küçük adımı at" in pending[0][1].text
+        assert "açık bir görev bulamadım" in pending[0][1].text
+
+
+@pytest.mark.asyncio
+async def test_free_text_reluctance_gets_task_aware_guidance_without_marking_skip(
+    tmp_path: Path,
+) -> None:
+    task = NotionTask(
+        page_id="conversation-task-reluctance",
+        title="LangGraph konuşma akışını tamamla",
+        scheduled_date=date(2026, 8, 5),
+        commitment_tier="Core",
+        priority="P1",
+        definition_of_done="Konuşma testleri geçiyor",
+        minimum_action="Workflow dosyasını aç",
+    )
+    async with build_runtime(tmp_path, tasks=[task]) as runtime:
+        token = await create_and_approve_plan(runtime, event_id="conversation-plan-reluctance")
+        assert token
+
+        result = await runtime.engine.process(
+            make_event(
+                event_id="conversation-reluctance",
+                event_type=InboundEventType.TELEGRAM_MESSAGE,
+                source=EventSource.TELEGRAM,
+                payload={"chat_id": "12345"},
+            ).model_copy(update={"text": "Bu işi yapmak istemiyorum"})
+        )
+
+        assert result.status == "conversation_replied"
+        message = (await runtime.outbox.pending())[-1][1]
+        assert "LangGraph konuşma akışını tamamla" in message.text
+        assert "5 dakika" in message.text
+        evidence = await runtime.events.build_evidence(
+            user_id="owner",
+            task_id=task.page_id,
+        )
+        assert evidence.counts == {}
+
+
+@pytest.mark.asyncio
+async def test_free_text_completion_records_task_and_replies_from_plan_context(
+    tmp_path: Path,
+) -> None:
+    task = NotionTask(
+        page_id="conversation-task-completed",
+        title="Conversation Agent testini bitir",
+        scheduled_date=date(2026, 8, 5),
+        commitment_tier="Core",
+        priority="P1",
+        definition_of_done="Tamamlama olayı kaydedildi",
+        minimum_action="Test dosyasını aç",
+    )
+    async with build_runtime(tmp_path, tasks=[task]) as runtime:
+        await create_and_approve_plan(runtime, event_id="conversation-plan-completed")
+
+        result = await runtime.engine.process(
+            make_event(
+                event_id="conversation-completed",
+                event_type=InboundEventType.TELEGRAM_MESSAGE,
+                source=EventSource.TELEGRAM,
+                payload={"chat_id": "12345"},
+            ).model_copy(update={"text": "Bu görevi bitirdim"})
+        )
+
+        assert result.status == "conversation_replied"
+        message = (await runtime.outbox.pending())[-1][1]
+        assert "Conversation Agent testini bitir" in message.text
+        assert "sözü davranışa çevirdin" in message.text
+        evidence = await runtime.events.build_evidence(
+            user_id="owner",
+            task_id=task.page_id,
+        )
+        assert evidence.counts == {"task.completed": 1}
 
 
 @pytest.mark.asyncio
@@ -690,3 +763,30 @@ def monitor_event(event_id: str, occurred_at: datetime) -> NormalizedInboundEven
         payload={"plan_date": "2026-08-05"},
         occurred_at=occurred_at,
     )
+
+
+async def create_and_approve_plan(
+    runtime: WorkflowTestRuntime,
+    *,
+    event_id: str,
+) -> str:
+    await runtime.engine.process(
+        make_event(
+            event_id=event_id,
+            event_type=InboundEventType.DAILY_PLAN_REQUESTED,
+            source=EventSource.SCHEDULER,
+            payload={"plan_date": "2026-08-05"},
+        )
+    )
+    plan_message = (await runtime.outbox.pending())[-1][1]
+    token = plan_message.buttons[0][0].callback_data.rsplit(":", maxsplit=1)[1]
+    await runtime.engine.process(
+        make_event(
+            event_id=f"{event_id}-approval",
+            event_type=InboundEventType.TELEGRAM_ACTION,
+            source=EventSource.TELEGRAM,
+            action=TaskAction.PLAN_APPROVED,
+            payload={"approval_token": token, "chat_id": "12345"},
+        )
+    )
+    return token

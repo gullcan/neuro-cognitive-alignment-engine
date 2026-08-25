@@ -14,6 +14,7 @@ from neuro_alignment.config import Settings
 from neuro_alignment.domain import (
     ACTION_TO_DOMAIN_EVENT,
     BehaviorEvidence,
+    ConversationDecision,
     CritiqueResult,
     DailyPlan,
     DailyPlanItem,
@@ -67,7 +68,9 @@ class WorkflowState(TypedDict):
     behavior_context: dict[str, Any] | None
     behavior_vector: list[float]
     task_title: str | None
+    conversation_focus_task_id: str | None
     feedback: dict[str, Any] | None
+    conversation: dict[str, Any] | None
     critique: dict[str, Any] | None
     critique_notes: list[str]
     feedback_attempts: int
@@ -195,6 +198,9 @@ class WorkflowEngine:
         builder.add_node("queue_feedback", self._queue_feedback)
 
         builder.add_node("record_checkin", self._record_checkin)
+        builder.add_node("load_conversation_context", self._load_conversation_context)
+        builder.add_node("conversation_agent", self._conversation_agent)
+        builder.add_node("record_conversation_action", self._record_conversation_action)
         builder.add_node("queue_checkin_response", self._queue_checkin_response)
         builder.add_node("complete_event", self._complete_event)
 
@@ -236,7 +242,10 @@ class WorkflowEngine:
         )
         builder.add_edge("queue_feedback", "complete_event")
 
-        builder.add_edge("record_checkin", "queue_checkin_response")
+        builder.add_edge("record_checkin", "load_conversation_context")
+        builder.add_edge("load_conversation_context", "conversation_agent")
+        builder.add_edge("conversation_agent", "record_conversation_action")
+        builder.add_edge("record_conversation_action", "queue_checkin_response")
         builder.add_edge("queue_checkin_response", "complete_event")
         builder.add_edge("complete_event", END)
         return builder.compile(
@@ -640,6 +649,13 @@ class WorkflowEngine:
             raise WorkflowInputError("Behavior route requires a supported task action.")
         if event.task_id is None:
             raise WorkflowInputError("Behavior route requires task_id.")
+        return await self._persist_behavior(event)
+
+    async def _persist_behavior(self, event: NormalizedInboundEvent) -> StateUpdate:
+        if event.action is None or event.action not in ACTION_TO_DOMAIN_EVENT:
+            raise WorkflowInputError("A supported task action is required.")
+        if event.task_id is None:
+            raise WorkflowInputError("A task_id is required.")
         await self.dependencies.events.append_domain_event(
             event_type=ACTION_TO_DOMAIN_EVENT[event.action].value,
             user_id=event.user_id,
@@ -825,27 +841,114 @@ class WorkflowEngine:
         )
         return {"status": "checkin_recorded"}
 
+    async def _load_conversation_context(self, state: WorkflowState) -> StateUpdate:
+        event = self._event(state)
+        resolved = await self.dependencies.plans.approved_plan(
+            event.user_id,
+            self._local_date(event),
+        )
+        if resolved is None:
+            return {
+                "plan": None,
+                "task_activity": {},
+                "task_title": None,
+                "conversation_focus_task_id": None,
+                "evidence": None,
+            }
+
+        _approval_token, plan = resolved
+        period_start = datetime.combine(
+            plan.plan_date,
+            time.min,
+            tzinfo=self.dependencies.settings.tz,
+        ).astimezone(UTC)
+        activity = await self.dependencies.events.task_activity_for_period(
+            user_id=event.user_id,
+            task_ids=[item.task_id for item in plan.items],
+            period_start=period_start,
+            period_end=period_start + timedelta(days=1),
+        )
+        focus = self._conversation_focus(plan, activity, event.occurred_at)
+        evidence = (
+            await self.dependencies.events.build_evidence(
+                user_id=event.user_id,
+                task_id=focus.task_id,
+            )
+            if focus
+            else None
+        )
+        return {
+            "plan": plan.model_dump(mode="json"),
+            "task_activity": {
+                task_id: value.model_dump(mode="json") for task_id, value in activity.items()
+            },
+            "task_title": focus.title if focus else None,
+            "conversation_focus_task_id": focus.task_id if focus else None,
+            "evidence": evidence.model_dump(mode="json") if evidence else None,
+        }
+
+    async def _conversation_agent(self, state: WorkflowState) -> StateUpdate:
+        event = self._event(state)
+        raw_plan = state["plan"]
+        plan = DailyPlan.model_validate(raw_plan) if raw_plan is not None else None
+        activity = {
+            task_id: TaskDayActivity.model_validate(value)
+            for task_id, value in state["task_activity"].items()
+        }
+        evidence = (
+            BehaviorEvidence.model_validate(state["evidence"])
+            if state["evidence"] is not None
+            else None
+        )
+        decision = await self.dependencies.intelligence.respond_to_message(
+            event=event,
+            plan=plan,
+            activity=activity,
+            focus_task_id=state["conversation_focus_task_id"],
+            evidence=evidence,
+        )
+        return {"conversation": decision.model_dump(mode="json")}
+
+    async def _record_conversation_action(self, state: WorkflowState) -> StateUpdate:
+        event = self._event(state)
+        decision = self._conversation_decision(state)
+        if decision.action is None or decision.task_id is None:
+            return {"status": "conversation_understood"}
+        if decision.confidence < 0.8:
+            return {"status": "conversation_needs_clarification"}
+
+        behavior_event = event.model_copy(
+            update={
+                "task_id": decision.task_id,
+                "action": TaskAction(decision.action),
+                "payload": {
+                    **event.payload,
+                    "self_report_text": event.text or "",
+                    "conversation_intent": decision.intent,
+                    "interpretation_confidence": decision.confidence,
+                },
+            }
+        )
+        update = await self._persist_behavior(behavior_event)
+        return {**update, "status": "conversation_action_recorded"}
+
     async def _queue_checkin_response(self, state: WorkflowState) -> StateUpdate:
         event = self._event(state)
         chat_id = self._chat_id(event)
         if not chat_id:
             return {"queued_messages": 0}
 
+        decision = self._conversation_decision(state)
         queued = await self.dependencies.outbox.enqueue(
             [
                 OutboundMessage(
                     idempotency_key=f"checkin-response:{event.event_id}",
                     chat_id=chat_id,
-                    text=(
-                        "Seni duydum. Enerjini ve odağını not aldım.\n\n"
-                        "Şimdi bütün günü düşünme; planındaki işlerden birini seç ve "
-                        "yalnızca ilk küçük adımı at. Başladığında bana haber ver, "
-                        "sonraki adımı birlikte netleştiririz."
-                    ),
+                    text=decision.reply,
                 )
             ]
         )
-        return {"queued_messages": queued}
+        return {"queued_messages": queued, "status": "conversation_replied"}
 
     async def _complete_event(self, state: WorkflowState) -> StateUpdate:
         await self.dependencies.events.complete_inbound(self._event(state))
@@ -903,7 +1006,9 @@ class WorkflowEngine:
             behavior_context=None,
             behavior_vector=[],
             task_title=None,
+            conversation_focus_task_id=None,
             feedback=None,
+            conversation=None,
             critique=None,
             critique_notes=[],
             feedback_attempts=0,
@@ -935,6 +1040,13 @@ class WorkflowEngine:
         if raw_feedback is None:
             raise RuntimeError("Neuro-behavioral feedback is missing from workflow state.")
         return NeuroFeedback.model_validate(raw_feedback)
+
+    @staticmethod
+    def _conversation_decision(state: WorkflowState) -> ConversationDecision:
+        raw_decision = state["conversation"]
+        if raw_decision is None:
+            raise RuntimeError("Conversation decision is missing from workflow state.")
+        return ConversationDecision.model_validate(raw_decision)
 
     def _format_plan(self, plan: DailyPlan) -> str:
         lines = [
@@ -971,6 +1083,58 @@ class WorkflowEngine:
         if scheduled_start.tzinfo is None:
             return scheduled_start.replace(tzinfo=self.dependencies.settings.tz)
         return scheduled_start.astimezone(self.dependencies.settings.tz)
+
+    def _conversation_focus(
+        self,
+        plan: DailyPlan,
+        activity: dict[str, TaskDayActivity],
+        observed_at: datetime,
+    ) -> DailyPlanItem | None:
+        terminal_actions = {
+            TaskAction.COMPLETED,
+            TaskAction.SKIPPED,
+            TaskAction.RESCHEDULED,
+        }
+        open_items = [
+            item
+            for item in plan.items
+            if activity.get(item.task_id) is None
+            or activity[item.task_id].latest_action not in terminal_actions
+        ]
+        if not open_items:
+            return None
+
+        active = [
+            item
+            for item in open_items
+            if activity.get(item.task_id)
+            and activity[item.task_id].latest_action in {TaskAction.STARTED, TaskAction.BLOCKED}
+        ]
+        if active:
+            return max(
+                active,
+                key=lambda item: (
+                    activity[item.task_id].latest_action_at or datetime.min.replace(tzinfo=UTC)
+                ),
+            )
+
+        now = observed_at.astimezone(self.dependencies.settings.tz)
+        due_items = [
+            (scheduled_start, item)
+            for item in open_items
+            if (scheduled_start := self._scheduled_start(item)) is not None
+            and scheduled_start <= now
+        ]
+        if due_items:
+            return min(due_items, key=lambda candidate: candidate[0])[1]
+        return min(
+            open_items,
+            key=lambda item: (
+                self._scheduled_start(item)
+                or datetime.max.replace(tzinfo=self.dependencies.settings.tz),
+                item.order,
+            ),
+        )
 
     @classmethod
     def _task_monitor_message(

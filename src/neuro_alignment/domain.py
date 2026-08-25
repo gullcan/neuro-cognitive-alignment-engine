@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
@@ -179,6 +179,27 @@ class NeuroFeedback(BaseModel):
     evidence_request: str = Field(min_length=1, max_length=220)
     confidence: float = Field(ge=0, le=1)
     evidence_refs: list[str] = Field(default_factory=list)
+
+
+class ConversationDecision(BaseModel):
+    """A bounded interpretation of one free-form Telegram message."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal[
+        "reluctance",
+        "started",
+        "completed",
+        "blocked",
+        "skipped",
+        "rescheduled",
+        "general",
+        "clarification",
+    ]
+    action: Literal["started", "completed", "blocked", "skipped", "rescheduled"] | None
+    task_id: str | None
+    confidence: float = Field(ge=0, le=1)
+    reply: str = Field(min_length=1, max_length=700)
 
 
 class CritiqueResult(BaseModel):

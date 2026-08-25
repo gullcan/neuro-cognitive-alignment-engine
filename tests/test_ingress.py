@@ -88,7 +88,7 @@ async def test_telegram_webhook_authenticates_processes_and_deduplicates(
             headers={"X-Telegram-Bot-Api-Secret-Token": "telegram-secret"},
         )
         assert first.status_code == 200
-        assert first.json()["status"] == "checkin_recorded"
+        assert first.json()["status"] == "conversation_replied"
         assert first.json()["queued_messages"] == 1
         assert first.json()["delivery"]["enabled"] is False
 

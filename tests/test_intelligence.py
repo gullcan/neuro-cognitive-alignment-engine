@@ -7,6 +7,7 @@ import pytest
 
 from neuro_alignment.domain import (
     BehaviorEvidence,
+    ConversationDecision,
     DailyPlan,
     EventSource,
     InboundEventType,
@@ -14,6 +15,7 @@ from neuro_alignment.domain import (
     NormalizedInboundEvent,
     NotionTask,
     TaskAction,
+    TaskDayActivity,
 )
 from neuro_alignment.intelligence import (
     ResilientIntelligenceProvider,
@@ -40,6 +42,17 @@ class FailingIntelligenceProvider:
         critique_notes: list[str],
     ) -> NeuroFeedback:
         raise RuntimeError("simulated rate limit")
+
+    async def respond_to_message(
+        self,
+        *,
+        event: NormalizedInboundEvent,
+        plan: DailyPlan | None,
+        activity: dict[str, TaskDayActivity],
+        focus_task_id: str | None,
+        evidence: BehaviorEvidence | None,
+    ) -> ConversationDecision:
+        raise RuntimeError("simulated conversation outage")
 
 
 @pytest.mark.asyncio
@@ -77,7 +90,24 @@ async def test_resilient_provider_falls_back_for_plan_and_feedback() -> None:
         evidence=BehaviorEvidence(task_id=task.page_id, total_events=1),
         critique_notes=[],
     )
+    conversation = await provider.respond_to_message(
+        event=event.model_copy(
+            update={
+                "event_type": InboundEventType.TELEGRAM_MESSAGE,
+                "action": None,
+                "task_id": None,
+                "text": "Yapmak istemiyorum",
+            }
+        ),
+        plan=plan,
+        activity={},
+        focus_task_id=task.page_id,
+        evidence=None,
+    )
 
     assert plan.generated_by == "rule-based-local"
     assert plan.items[0].task_id == task.page_id
     assert "Başladın" in feedback.word_action_gap
+    assert conversation.intent == "reluctance"
+    assert conversation.action is None
+    assert "5 dakika" in conversation.reply

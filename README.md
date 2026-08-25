@@ -14,6 +14,7 @@ The system is not a generic reminder bot and does not provide medical diagnosis 
 - Read daily commitments dynamically from Notion
 - Open each approved commitment at its scheduled time and monitor its outcome
 - Receive check-ins and task actions through Telegram
+- Understand free-form Turkish messages against the active plan
 - Orchestrate stateful workflows with LangGraph
 - Persist behavioral events and graph checkpoints
 - Retrieve semantically similar behavioral episodes
@@ -51,7 +52,8 @@ claim inbound event
 ├── task behavior -> record event + vector memory -> retrieve similar evidence
 │                    -> Neuro-Behavioral Agent
 │                    -> Safety Critic -> Telegram outbox
-└── check-in -> record self-report
+└── free-form message -> approved plan + current task activity + bounded evidence
+                         -> Conversation Agent -> optional task action -> Telegram outbox
 ```
 
 Every branch finishes by marking the inbound event complete. Repeated source events are
@@ -83,6 +85,13 @@ The zero-cost deployment uses Groq's OpenAI-compatible Responses API with
 `GROQ_MODEL=openai/gpt-oss-20b`. Store `GROQ_API_KEY` only in Render's Environment page.
 Task titles and the bounded behavioral context required to write feedback are sent to the
 selected LLM provider; API keys and infrastructure secrets are never included in prompts.
+
+Free-form Telegram text is interpreted as a structured `ConversationDecision`. Explicit
+self-reports such as starting, completing, being blocked, skipping, or rescheduling can
+update the focused task. Reluctance such as “yapmak istemiyorum” remains a feeling and
+receives a small-start strategy; it is never silently converted into a skipped task.
+Actions below the confidence threshold, references outside today's approved plan, and
+ambiguous task references are not persisted.
 
 ## Database migrations
 
