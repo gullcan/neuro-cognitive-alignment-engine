@@ -87,11 +87,13 @@ async def test_daily_plan_is_persisted_queued_and_idempotent(tmp_path: Path) -> 
         pending = await runtime.outbox.pending()
         assert len(pending) == 1
         plan_message = pending[0][1]
-        assert "GÜNLÜK TAAHHÜT HARİTASI" in plan_message.text
+        assert "Bugünün planı" in plan_message.text
         assert "LangGraph state tasarımını tamamla" in plan_message.text
+        assert "taahhüt" not in plan_message.text.casefold()
+        assert "kanıt" not in plan_message.text.casefold()
         assert [button.text for button in plan_message.buttons[0]] == [
-            "Planı onayla",
-            "Planı reddet",
+            "Bugünün planına geç",
+            "Planı düzenleyeceğim",
         ]
 
         duplicate = await runtime.engine.process(event)
@@ -116,8 +118,8 @@ async def test_empty_daily_plan_is_explained_without_approval_buttons(tmp_path: 
         assert result.status == "plan_empty"
         assert result.queued_messages == 1
         message = (await runtime.outbox.pending())[0][1]
-        assert "BUGÜN İÇİN TAAHHÜT BULUNAMADI — 2026-08-25" in message.text
-        assert "boş plan için onay vermen gerekmiyor" in message.text
+        assert "Bugünün planı henüz boş — 2026-08-25" in message.text
+        assert "onaylaman gereken bir şey yok" in message.text
         assert message.buttons == []
         assert await runtime.plans.approved_plan("owner", date(2026, 8, 25)) is None
 
@@ -172,7 +174,7 @@ async def test_plan_approval_follows_its_own_deterministic_branch(tmp_path: Path
         commitment_tier="Core",
         priority="P1",
         definition_of_done="Davranış düğmeleri görünür",
-        minimum_action="Başlattım düğmesine bas",
+        minimum_action="Başlıyorum düğmesine bas",
     )
     async with build_runtime(tmp_path, tasks=[task]) as runtime:
         plan_event = make_event(
@@ -201,12 +203,12 @@ async def test_plan_approval_follows_its_own_deterministic_branch(tmp_path: Path
         messages = [message for _record_id, message in await runtime.outbox.pending()]
         assert len(messages) == 3
         task_message = messages[-1]
-        assert "AKTİF TAAHHÜT 1" in task_message.text
+        assert "Sıradaki iş · 1" in task_message.text
         assert "Onaylanan görevi başlat" in task_message.text
         assert [[button.text for button in row] for row in task_message.buttons] == [
-            ["Başlattım", "Tamamladım"],
-            ["Engellendim", "Atladım"],
-            ["Erteledim"],
+            ["Başlıyorum", "Bitirdim"],
+            ["Takıldım", "Bugün yapmayacağım"],
+            ["Başka zamana aldım"],
         ]
         assert task_message.buttons[0][0].callback_data == ("task:started:notion-task-approval")
 
@@ -246,8 +248,8 @@ async def test_monitor_controls_every_scheduled_task_and_closes_the_day(tmp_path
             )
         )
         plan_message = (await runtime.outbox.pending())[0][1]
-        assert "İlk entegrasyonu doğrula [Core/P1 · 12:00 · 30 dk]" in plan_message.text
-        assert "İkinci entegrasyonu doğrula [Core/P1 · 13:00 · 30 dk]" in plan_message.text
+        assert "İlk entegrasyonu doğrula · 12:00 · 30 dk" in plan_message.text
+        assert "İkinci entegrasyonu doğrula · 13:00 · 30 dk" in plan_message.text
         token = plan_message.buttons[0][0].callback_data.rsplit(":", maxsplit=1)[1]
         approval = await runtime.engine.process(
             make_event(
@@ -327,12 +329,25 @@ async def test_monitor_controls_every_scheduled_task_and_closes_the_day(tmp_path
         assert final.queued_messages == 1
 
         messages = [message for _record_id, message in await runtime.outbox.pending()]
-        assert any("SAATİ GELDİ · 12:00" in message.text for message in messages)
-        assert any("BAŞLANGIÇ KONTROLÜ · 12:00" in message.text for message in messages)
-        assert any("SAATİ GELDİ · 13:00" in message.text for message in messages)
-        assert any("İLERLEME KONTROLÜ" in message.text for message in messages)
-        assert any("GÜN SONU YAKLAŞIYOR\n2/2" in message.text for message in messages)
-        assert any("GÜNÜN SON KONTROLÜ\n2/2" in message.text for message in messages)
+        assert any(
+            "Şimdi İlk entegrasyonu doğrula zamanı · 12:00" in message.text for message in messages
+        )
+        assert any(
+            "Birlikte küçük bir başlangıç yapalım · 12:00" in message.text for message in messages
+        )
+        assert any(
+            "Şimdi İkinci entegrasyonu doğrula zamanı · 13:00" in message.text
+            for message in messages
+        )
+        assert any("Nasıl gidiyor?" in message.text for message in messages)
+        assert any(
+            "Akşam toparlaması\nBugünkü 2 işin hepsini bitirdin" in message.text
+            for message in messages
+        )
+        assert any(
+            "Günün son turu\nBugünkü 2 işin hepsini bitirdin" in message.text
+            for message in messages
+        )
 
 
 @pytest.mark.asyncio
@@ -354,8 +369,8 @@ async def test_text_checkin_is_recorded_and_receives_evidence_bounded_response(
         pending = await runtime.outbox.pending()
         assert len(pending) == 1
         assert pending[0][1].chat_id == "12345"
-        assert "CHECK-IN KAYDEDİLDİ" in pending[0][1].text
-        assert "henüz davranış kanıtı değildir" in pending[0][1].text
+        assert "Seni duydum" in pending[0][1].text
+        assert "yalnızca ilk küçük adımı at" in pending[0][1].text
 
 
 @pytest.mark.asyncio
@@ -410,8 +425,10 @@ async def test_behavior_feedback_uses_evidence_and_keeps_threads_isolated(
         assert all("NÖRO-BİLİŞSEL BAĞLAM" not in message.text for message in messages)
         assert all("\n" not in message.text for message in messages)
         assert all(len(message.text) <= 902 for message in messages)
-        assert "niyet bitti; davranış başladı" in messages[0].text
-        assert "Kendine güvenmek için gereken kanıtı sen ürettin" in messages[1].text
+        assert all("taahhüt" not in message.text.casefold() for message in messages)
+        assert all("davranış kanıtı" not in message.text.casefold() for message in messages)
+        assert "Başladın" in messages[0].text
+        assert "Bugünkü emeğin" in messages[1].text
 
         internal_feedback = NeuroFeedback.model_validate(second_snapshot.values["feedback"])
         assert "Güncel davranış olayı" in internal_feedback.observed_evidence
@@ -442,9 +459,9 @@ async def test_skipped_feedback_is_short_personalized_and_actionable() -> None:
 
     message = WorkflowEngine._format_feedback(feedback)
 
-    assert "atlama/erteleme kaydı 4'e çıktı" in message
-    assert "10 dakikalık Minimum Action'ı şimdi uygula" in message
-    assert "doğrulanabilir engeli bildir" in message
+    assert "Bu işi 4 kez atladın ya da erteledin" in message
+    assert "yalnızca 10 dakikasını şimdi yap" in message
+    assert "seni gerçekten neyin durdurduğunu yaz" in message
     assert "\n" not in message
     assert "GÖZLENEN KANIT" not in message
     assert len(message) <= 902

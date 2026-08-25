@@ -335,11 +335,11 @@ class WorkflowEngine:
                 buttons=[
                     [
                         InlineButton(
-                            text="Planı onayla",
+                            text="Bugünün planına geç",
                             callback_data=f"plan:approve:{token}",
                         ),
                         InlineButton(
-                            text="Planı reddet",
+                            text="Planı düzenleyeceğim",
                             callback_data=f"plan:reject:{token}",
                         ),
                     ]
@@ -482,7 +482,7 @@ class WorkflowEngine:
                 self._day_status_message(
                     idempotency_key=f"day-summary:{token}",
                     chat_id=chat_id,
-                    heading="GÜNÜN SON KONTROLÜ",
+                    heading="Günün son turu",
                     plan=plan,
                     open_items=open_items,
                     completed_count=completed_count,
@@ -493,7 +493,7 @@ class WorkflowEngine:
                 self._day_status_message(
                     idempotency_key=f"day-recovery:{token}",
                     chat_id=chat_id,
-                    heading="GÜN SONU YAKLAŞIYOR",
+                    heading="Akşam toparlaması",
                     plan=plan,
                     open_items=open_items,
                     completed_count=completed_count,
@@ -545,10 +545,13 @@ class WorkflowEngine:
         chat_id = self._chat_id(event)
         if chat_id:
             decision_text = (
-                "Plan onaylandı. Saatli görevler zamanı geldiğinde açılacak; "
-                "sistem başlangıç ve ilerleme kanıtını gün boyunca takip edecek."
+                "Tamam, bugünün planı hazır. Saatli işlerini zamanı geldiğinde "
+                "hatırlatacağım; başladıktan sonra da nasıl gittiğini soracağım."
                 if status == "approved"
-                else "Plan reddedildi. Yeni plan oluşturulmadan taahhüt seti aktif sayılmayacak."
+                else (
+                    "Tamam, bu planı kullanmıyoruz. Notion'da istediğin değişiklikleri "
+                    "yaptıktan sonra planı yeniden oluşturabilirsin."
+                )
             )
             messages = [
                 OutboundMessage(
@@ -580,17 +583,17 @@ class WorkflowEngine:
         approval_token: str,
         item: DailyPlanItem,
     ) -> OutboundMessage:
-        definition = item.definition_of_done or "Somut tamamlanma kanıtını bildir."
-        minimum_action = item.minimum_action or "İlk fiziksel adımı belirle ve başlat."
+        definition = item.definition_of_done or "Bu işin bittiğini gösterecek sonucu belirle."
+        minimum_action = item.minimum_action or "Yapabileceğin en küçük adımla başla."
         return OutboundMessage(
             idempotency_key=f"plan-task:{approval_token}:{item.task_id}",
             chat_id=chat_id,
             text=(
-                f"AKTİF TAAHHÜT {item.order}\n"
+                f"Sıradaki iş · {item.order}\n"
                 f"{item.title}\n\n"
-                f"Minimum eylem: {minimum_action}\n"
-                f"Tamamlanma kanıtı: {definition}\n\n"
-                "Durumu yalnızca gözlenebilir eylemine göre seç."
+                f"Başlamak için: {minimum_action}\n"
+                f"Bitti diyebilmen için: {definition}\n\n"
+                "Şu an gerçekten nerede olduğunu aşağıdan seç; oradan birlikte ilerleyelim."
             ),
             buttons=WorkflowEngine._task_action_buttons(item.task_id),
         )
@@ -600,27 +603,27 @@ class WorkflowEngine:
         return [
             [
                 InlineButton(
-                    text="Başlattım",
+                    text="Başlıyorum",
                     callback_data=f"task:started:{task_id}",
                 ),
                 InlineButton(
-                    text="Tamamladım",
+                    text="Bitirdim",
                     callback_data=f"task:completed:{task_id}",
                 ),
             ],
             [
                 InlineButton(
-                    text="Engellendim",
+                    text="Takıldım",
                     callback_data=f"task:blocked:{task_id}",
                 ),
                 InlineButton(
-                    text="Atladım",
+                    text="Bugün yapmayacağım",
                     callback_data=f"task:skipped:{task_id}",
                 ),
             ],
             [
                 InlineButton(
-                    text="Erteledim",
+                    text="Başka zamana aldım",
                     callback_data=f"task:rescheduled:{task_id}",
                 )
             ],
@@ -745,6 +748,28 @@ class WorkflowEngine:
                 + ", ".join(matched_claims)
             )
 
+        public_text = " ".join(
+            (
+                feedback.word_action_gap,
+                feedback.immediate_intervention,
+                feedback.evidence_request,
+            )
+        ).casefold()
+        formal_terms = {
+            "davranış kanıtı",
+            "güven skoru",
+            "müdahale",
+            "söz-eylem açığı",
+            "söz–eylem açığı",
+            "taahhüt",
+        }
+        matched_terms = sorted(term for term in formal_terms if term in public_text)
+        if matched_terms:
+            reasons.append(
+                "User-facing feedback uses formal or clinical language instead of the "
+                "required conversational guide voice: " + ", ".join(matched_terms)
+            )
+
         critique = CritiqueResult(passed=not reasons, reasons=reasons)
         return {
             "critique": critique.model_dump(mode="json"),
@@ -807,12 +832,10 @@ class WorkflowEngine:
                     idempotency_key=f"checkin-response:{event.event_id}",
                     chat_id=chat_id,
                     text=(
-                        "CHECK-IN KAYDEDİLDİ\n\n"
-                        "Bu bildirim bir niyet beyanıdır; henüz davranış kanıtı değildir. "
-                        "Söz-eylem tutarlılığı, planlanan görevin başlatılması ve "
-                        "tamamlanmasıyla ölçülecek.\n\n"
-                        "Şimdi seçtiğin görevin minimum eylemini başlat ve sonucu "
-                        "görev düğmesiyle bildir."
+                        "Seni duydum. Enerjini ve odağını not aldım.\n\n"
+                        "Şimdi bütün günü düşünme; planındaki işlerden birini seç ve "
+                        "yalnızca ilk küçük adımı at. Başladığında bana haber ver, "
+                        "sonraki adımı birlikte netleştiririz."
                     ),
                 )
             ]
@@ -908,29 +931,31 @@ class WorkflowEngine:
         return NeuroFeedback.model_validate(raw_feedback)
 
     def _format_plan(self, plan: DailyPlan) -> str:
-        lines = [f"GÜNLÜK TAAHHÜT HARİTASI — {plan.plan_date}", plan.headline, ""]
+        lines = [
+            f"Bugünün planı — {plan.plan_date}",
+            f"Bugün için {len(plan.items)} iş var. Hepsini birden düşünmek yerine "
+            "sırayla ilerleyeceğiz.",
+            "",
+        ]
         for item in plan.items:
             duration = f" · {item.estimated_minutes} dk" if item.estimated_minutes else ""
             scheduled_start = self._scheduled_start(item)
             schedule = f" · {scheduled_start:%H:%M}" if scheduled_start else " · saat yok"
-            lines.append(
-                f"{item.order}. {item.title} "
-                f"[{item.commitment_tier}/{item.priority}{schedule}{duration}]"
-            )
+            lines.append(f"{item.order}. {item.title}{schedule}{duration}")
             if item.minimum_action:
-                lines.append(f"   Minimum eylem: {item.minimum_action}")
+                lines.append(f"   Başlamak için: {item.minimum_action}")
         if plan.capacity_warning:
-            lines.extend(("", f"Kapasite uyarısı: {plan.capacity_warning}"))
-        lines.extend(("", "Bu plan ancak onayından sonra aktif taahhüt sayılacak."))
+            lines.extend(("", f"Küçük bir not: {plan.capacity_warning}"))
+        lines.extend(("", "Hazırsan bugünün planına geçelim."))
         return "\n".join(lines)[:4096]
 
     @staticmethod
     def _format_empty_plan(plan: DailyPlan) -> str:
         return (
-            f"BUGÜN İÇİN TAAHHÜT BULUNAMADI — {plan.plan_date}\n\n"
-            "Notion'da Window tarihi bugün olan ve Status değeri Archived olmayan bir görev "
-            "bulunamadı. Görevlerini ekledikten sonra Daily Notion plan akışını yeniden "
-            "çalıştır; boş plan için onay vermen gerekmiyor."
+            f"Bugünün planı henüz boş — {plan.plan_date}\n\n"
+            "Notion'da bugüne tarih verilmiş bir görev göremedim. Bugün yapmak istediklerini "
+            "ekledikten sonra Daily Notion plan akışını yeniden çalıştır; burada onaylaman "
+            "gereken bir şey yok."
         )
 
     def _scheduled_start(self, item: DailyPlanItem) -> datetime | None:
@@ -959,38 +984,40 @@ class WorkflowEngine:
 
     @staticmethod
     def _format_due_reminder(item: DailyPlanItem, scheduled_start: datetime) -> str:
-        minimum_action = item.minimum_action or "İlk fiziksel adımı belirle ve başlat."
+        minimum_action = item.minimum_action or "Yapabileceğin en küçük adımla başla."
         return (
-            f"SAATİ GELDİ · {scheduled_start:%H:%M}\n{item.title}\n\n"
-            f"Şimdi yalnızca Minimum Action'ı başlat: {minimum_action} "
-            "Başladığında 'Başlattım'a bas; niyet değil, başlangıç kaydı oluştur."
+            f"Şimdi {item.title} zamanı · {scheduled_start:%H:%M}\n\n"
+            "Gözünde büyütmeden yalnızca şuradan başla: "
+            f"{minimum_action} Başlayınca 'Başlıyorum'a dokun; gerisini adım adım götürelim."
         )
 
     @staticmethod
     def _format_start_check(item: DailyPlanItem, scheduled_start: datetime) -> str:
-        minimum_action = item.minimum_action or "İlk fiziksel adımı belirle ve başlat."
+        minimum_action = item.minimum_action or "Yapabileceğin en küçük adımla başla."
         return (
-            f"BAŞLANGIÇ KONTROLÜ · {scheduled_start:%H:%M}\n{item.title}\n\n"
-            "Planlanan saat geçti ve henüz davranış kaydı yok. Sessizlik görevi ilerletmez: "
-            f"şimdi {minimum_action} Sonra gerçek durumu aşağıdan bildir."
+            f"Birlikte küçük bir başlangıç yapalım · {scheduled_start:%H:%M}\n"
+            f"{item.title}\n\n"
+            "Bu iş için ayırdığın saat geçti ama henüz başladığını duymadım. Kendine "
+            f"yüklenmeden işi küçült ve şimdi şunu yap: {minimum_action} Sonra aşağıdan "
+            "gerçek durumunu seç."
         )
 
     @staticmethod
     def _format_progress_check(item: DailyPlanItem, expected_minutes: int) -> str:
-        definition = item.definition_of_done or "Somut tamamlanma kanıtını bildir."
+        definition = item.definition_of_done or "Bu işin bittiğini gösterecek sonucu belirle."
         return (
-            f"İLERLEME KONTROLÜ · {item.title}\n\n"
-            f"Başlangıç kaydından {expected_minutes} dakika geçti; sonuç kaydı henüz yok. "
-            f"Bittiyse kanıtı tamamla: {definition} Devam etmiyorsa gerçek engeli seç."
+            f"Nasıl gidiyor? · {item.title}\n\n"
+            f"Başlayalı yaklaşık {expected_minutes} dakika oldu. Bittiysen sonucu netleştir: "
+            f"{definition} Hâlâ devam ediyorsan ritmini koru; takıldıysan bunu dürüstçe seç."
         )
 
     @staticmethod
     def _format_blocked_check(item: DailyPlanItem) -> str:
-        minimum_action = item.minimum_action or "İlk fiziksel adımı belirle ve başlat."
+        minimum_action = item.minimum_action or "Yapabileceğin en küçük adımla başla."
         return (
-            f"ENGEL TAKİBİ · {item.title}\n\n"
-            "Engel kaydından sonra yeni davranış kanıtı gelmedi. Engel hâlâ gerçekse "
-            f"somutlaştır; çözüldüyse zinciri yeniden başlat: {minimum_action}"
+            f"Takıldığın yeri birlikte açalım · {item.title}\n\n"
+            "Bir süre önce takıldığını söyledin. Sorun hâlâ sürüyorsa tam olarak neyi "
+            f"beklediğini yaz; çözüldüyse yeniden şuradan başla: {minimum_action}"
         )
 
     @classmethod
@@ -1006,9 +1033,9 @@ class WorkflowEngine:
     ) -> OutboundMessage:
         if not open_items:
             text = (
-                f"{heading}\n{completed_count}/{len(plan.items)} taahhüt tamamlandı. "
-                "Bugünün planını eksiksiz davranış kanıtıyla kapattın; hangi başlangıç "
-                "ipucunun en iyi çalıştığını yarın yeniden kullanmak için kaydet."
+                f"{heading}\nBugünkü {len(plan.items)} işin hepsini bitirdin. "
+                "Bugün kendin için verdiğin kararların arkasında durdun. Başlamanı en çok "
+                "neyin kolaylaştırdığını bir cümleyle yaz; yarın aynı yolu yeniden kullan."
             )
             buttons: list[list[InlineButton]] = []
         else:
@@ -1017,11 +1044,11 @@ class WorkflowEngine:
             if remaining_count > 0:
                 visible_titles += f" ve {remaining_count} görev daha"
             first = open_items[0]
-            minimum_action = first.minimum_action or "İlk fiziksel adımı belirle ve başlat."
+            minimum_action = first.minimum_action or "Yapabileceğin en küçük adımla başla."
             text = (
-                f"{heading}\n{completed_count}/{len(plan.items)} taahhüt tamamlandı. "
-                f"Açık kalanlar: {visible_titles}. Şimdi ilk açık görevin zincirini kapat: "
-                f"{minimum_action}"
+                f"{heading}\nBugünkü {len(plan.items)} işten {completed_count} tanesi bitti. "
+                f"Kalanlar: {visible_titles}. Hepsini birden düşünme; şimdi yalnızca "
+                f"sıradaki iş için şunu yap: {minimum_action}"
             )
             buttons = cls._task_action_buttons(first.task_id)
         return OutboundMessage(

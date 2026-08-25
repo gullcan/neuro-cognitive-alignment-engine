@@ -153,7 +153,7 @@ async def test_plan_callback_explains_stale_decision_and_clears_keyboard(
                 commitment_tier="Core",
                 priority="P1",
                 definition_of_done="Klavye kaldırıldı",
-                minimum_action="Planı onayla",
+                minimum_action="Planı aç",
             )
         ]
     )  # type: ignore[assignment]
@@ -190,8 +190,8 @@ async def test_plan_callback_explains_stale_decision_and_clears_keyboard(
     assert stale.json()["status"] == "plan_approved"
     assert stale.json()["queued_messages"] == 0
     assert telegram.answered_callbacks[-2:] == [
-        ("callback-7003", "Plan onaylandı."),
-        ("callback-7004", "Bu plan zaten onaylandı."),
+        ("callback-7003", "Bugünün planı hazır."),
+        ("callback-7004", "Bu plan zaten hazır."),
     ]
     assert telegram.cleared_keyboards == [("12345", 91), ("12345", 92)]
 

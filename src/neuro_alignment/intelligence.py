@@ -69,8 +69,7 @@ class RuleBasedIntelligenceProvider:
                 definition_of_done=task.definition_of_done,
                 minimum_action=task.minimum_action,
                 rationale=(
-                    f"{task.commitment_tier} taahhüt ve {task.priority} öncelik "
-                    "sırasına göre konumlandırıldı."
+                    f"{task.commitment_tier} grubu ve {task.priority} önceliğine göre sıralandı."
                 ),
             )
             for index, task in enumerate(ordered, start=1)
@@ -84,7 +83,10 @@ class RuleBasedIntelligenceProvider:
             )
         return DailyPlan(
             plan_date=plan_date,
-            headline=f"{len(items)} taahhüt için kanıta dayalı günlük plan",
+            headline=(
+                f"Bugün için {len(items)} görev var. Hepsini birden düşünmek yerine "
+                "sırayla ilerleyeceğiz."
+            ),
             items=items,
             capacity_warning=warning,
             generated_by="rule-based-local",
@@ -136,62 +138,62 @@ class RuleBasedIntelligenceProvider:
             )
 
         if action == TaskAction.COMPLETED:
-            gap = f"Verdiğin sözü tuttun: '{task_title}' tamamlandı."
+            gap = f"Bunu yaptın: '{task_title}' bitti."
             completion_label = "ilk" if completed <= 1 else f"{completed}."
             intervention = (
-                "Kendine güvenmek için gereken kanıtı sen ürettin; bu, kayıtlardaki "
-                f"{completion_label} somut tamamlaman."
+                "Bugünkü emeğin, kendine güvenmek için gerçek bir sebep oluşturdu; "
+                f"bu, son dönemde tamamladığın {completion_label} planlı görev."
             )
             request = (
-                "Çıktıyı paylaş ve başlamanı sağlayan ipucunu tek cümleyle kaydet; "
-                "aynı ipucunu yeniden kullan."
+                "Bir an durup başlamanı neyin kolaylaştırdığını fark et ve tek cümleyle "
+                "yaz; yarın yine işine yarayacak."
             )
         elif action == TaskAction.STARTED:
-            gap = f"'{task_title}' için niyet bitti; davranış başladı."
+            gap = f"Başladın; '{task_title}' artık zihnindeki bir iş değil, ilerleyen bir iş."
             intervention = (
-                "Disiplin, doğru duyguyu beklemek değil, başladığın küçük eylemi "
-                "sürdürmektir: Minimum Action üzerinde şimdi 12 dakika kesintisiz çalış."
+                "İlk adımı attın, şimdi ritmi bozma: yalnızca önündeki küçük adıma "
+                "12 dakika boyunca odaklan."
             )
-            request = "Süre bitince sonucu 'Tamamladım' veya 'Engellendim' olarak bildir."
+            request = "Süre bitince 'Bitirdim' ya da 'Takıldım' diyerek bana haber ver."
         elif action == TaskAction.BLOCKED:
-            gap = f"'{task_title}' için söz–eylem zinciri şu anda engel noktasında duruyor."
+            gap = f"'{task_title}' üzerinde bir yerde takıldın; bu, yolun bittiği anlamına gelmez."
             intervention = (
-                "Engel son karar değil, çözülecek veridir: onu 'belirsizlik', "
-                "'dış bağımlılık' veya 'başlangıç direnci' olarak sınıflandır ve "
-                "yapılabilecek en küçük fiziksel adımı şimdi başlat."
+                "Şimdi kendine dürüstçe sor: ne yapacağını mı bilmiyorsun, birini mi "
+                "bekliyorsun, yoksa başlamak mı zor geliyor? Cevabına göre yapabileceğin "
+                "en küçük adımı seç."
             )
-            request = "Engelin türünü ve attığın ilk adımı yaz."
+            request = "Seni durduran şeyi ve şimdi atacağın küçük adımı bir cümleyle yaz."
         elif action == TaskAction.SKIPPED:
             avoidance_count = skipped + rescheduled
             history = (
-                f" Bu görevdeki atlama/erteleme kaydı {avoidance_count}'e çıktı; "
-                "bu sayı kimliğin değil, değiştireceğin döngünün kanıtı."
+                f" Bu işi {avoidance_count} kez atladın ya da erteledin. Bu seni başarısız "
+                "yapmaz ama aynı döngünün kendiliğinden değişmeyeceğini gösterir."
                 if avoidance_count >= 2
                 else ""
             )
-            gap = f"'{task_title}' bugün atlandı; söz–eylem açığı açık kaldı.{history}"
+            gap = f"Bugün şu işi yapmamayı seçtin: '{task_title}'.{history}"
             intervention = (
-                "Bunu bir kimlik yargısına çevirmek yerine bir sonraki seçimi değiştir: "
-                "yeni tarih vermeden önce 10 dakikalık Minimum Action'ı şimdi uygula."
+                "Kendini suçlamak yerine buradan bir şey öğren: seni durduran asıl nedeni "
+                "adlandır, sonra işi küçültüp yalnızca 10 dakikasını şimdi yap."
             )
-            request = "10 dakika sonra yapılan işi veya doğrulanabilir engeli bildir."
+            request = "10 dakika sonra ne yaptığını ya da seni gerçekten neyin durdurduğunu yaz."
         else:
             avoidance_count = skipped + rescheduled
             history = (
-                f" Bu görevdeki atlama/erteleme kaydı {avoidance_count}'e çıktı; "
-                "bu sayı kimliğin değil, değiştireceğin döngünün kanıtı."
+                f" Bu işi {avoidance_count} kez atladın ya da erteledin. Bu seni başarısız "
+                "yapmaz ama aynı döngünün kendiliğinden değişmeyeceğini gösterir."
                 if avoidance_count >= 2
                 else ""
             )
             gap = (
-                f"'{task_title}' yeniden planlandı; tarih değişti ama verilen söz henüz "
-                f"davranışla kapanmadı.{history}"
+                f"Şu işi başka bir zamana aldın: '{task_title}'. Yeni tarih tek başına "
+                f"işi kolaylaştırmayacak.{history}"
             )
             intervention = (
-                "Yeni tarihi kaçışa değil uygulanabilirliğe dönüştür: ilk 10 dakikalık "
-                "Minimum Action'ı şimdi tamamla."
+                "Bu kez sadece günü değil, nasıl başlayacağını da netleştir: yeni saat "
+                "geldiğinde yapacağın ilk küçük adımı şimdiden seç."
             )
-            request = "Yaptığın somut işi ve yeni tarih için belirlediğin başlangıç ipucunu yaz."
+            request = "Yeni zamanı ve o anda atacağın ilk adımı bana yaz."
 
         return NeuroFeedback(
             observed_evidence=(
@@ -309,6 +311,8 @@ Outcome:
 - Use cognitive load and estimated duration to avoid an unrealistic sequence.
 - Do not invent tasks, dates, evidence, diagnoses, or personal history.
 - If capacity is excessive, keep the tasks but populate capacity_warning.
+- Write headline in warm, conversational Turkish. Avoid bureaucratic terms such as
+  taahhüt, kanıt, analiz, and optimizasyon in user-facing prose.
 
 Return only the required structured DailyPlan.
 """.strip()
@@ -327,6 +331,10 @@ Required behavior:
 - Give one immediate action that can be executed now and one evidence request.
 - Make word_action_gap, immediate_intervention, and evidence_request form one concise,
   vivid Turkish paragraph when joined in that order. Use plain language and no headings.
+- Speak like a warm, honest guide accompanying the user through the day. Notice real
+  progress, offer perspective after setbacks, and explain the next step in everyday Turkish.
+- Avoid bureaucratic or clinical user-facing terms such as taahhüt, davranış kanıtı,
+  söz-eylem açığı, müdahale, and güven skoru.
 - Support autonomy and competence: connect confidence to the user's own observable action,
   not to praise, approval, obedience, or attachment to the assistant.
 - Prefer a concrete cue-action or if-then plan over abstract motivation.

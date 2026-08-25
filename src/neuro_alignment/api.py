@@ -406,14 +406,18 @@ def require_internal_api_key(received: str | None, settings: Settings) -> None:
 
 def plan_callback_text(result: EventProcessingResponse) -> str:
     if result.status == "rejected":
-        return "Bu plan kararı artık değiştirilemez."
+        return "Bu seçim daha önce yapıldı."
     if result.status == "plan_approved":
-        return "Plan onaylandı." if result.queued_messages else "Bu plan zaten onaylandı."
+        return "Bugünün planı hazır." if result.queued_messages else "Bu plan zaten hazır."
     if result.status == "plan_rejected":
-        return "Plan reddedildi." if result.queued_messages else "Bu plan zaten reddedildi."
+        return (
+            "Tamam, planı düzenleyebilirsin."
+            if result.queued_messages
+            else "Bu planı daha önce düzenlemeye ayırdın."
+        )
     if result.status == "duplicate":
         return "Bu işlem daha önce işlendi."
-    return "Plan kararı işlendi."
+    return "Tamamdır."
 
 
 app = create_app()
