@@ -304,7 +304,26 @@ class WorkflowEngine:
     async def _queue_plan(self, state: WorkflowState) -> StateUpdate:
         event = self._event(state)
         chat_id = self._chat_id(event)
+        plan = self._plan(state)
         queued = 0
+        if not plan.items:
+            await self.dependencies.plans.update_status(
+                event.user_id,
+                plan.plan_date,
+                "empty",
+            )
+            if chat_id:
+                queued = await self.dependencies.outbox.enqueue(
+                    [
+                        OutboundMessage(
+                            idempotency_key=f"daily-plan-empty:{event.event_id}",
+                            chat_id=chat_id,
+                            text=self._format_empty_plan(plan),
+                        )
+                    ]
+                )
+            return {"queued_messages": queued, "status": "plan_empty"}
+
         if chat_id:
             token = state["approval_token"]
             if token is None:
@@ -312,7 +331,7 @@ class WorkflowEngine:
             message = OutboundMessage(
                 idempotency_key=f"daily-plan:{event.event_id}",
                 chat_id=chat_id,
-                text=self._format_plan(self._plan(state)),
+                text=self._format_plan(plan),
                 buttons=[
                     [
                         InlineButton(
@@ -888,13 +907,15 @@ class WorkflowEngine:
             raise RuntimeError("Neuro-behavioral feedback is missing from workflow state.")
         return NeuroFeedback.model_validate(raw_feedback)
 
-    @staticmethod
-    def _format_plan(plan: DailyPlan) -> str:
+    def _format_plan(self, plan: DailyPlan) -> str:
         lines = [f"GÜNLÜK TAAHHÜT HARİTASI — {plan.plan_date}", plan.headline, ""]
         for item in plan.items:
             duration = f" · {item.estimated_minutes} dk" if item.estimated_minutes else ""
+            scheduled_start = self._scheduled_start(item)
+            schedule = f" · {scheduled_start:%H:%M}" if scheduled_start else " · saat yok"
             lines.append(
-                f"{item.order}. {item.title} [{item.commitment_tier}/{item.priority}{duration}]"
+                f"{item.order}. {item.title} "
+                f"[{item.commitment_tier}/{item.priority}{schedule}{duration}]"
             )
             if item.minimum_action:
                 lines.append(f"   Minimum eylem: {item.minimum_action}")
@@ -902,6 +923,15 @@ class WorkflowEngine:
             lines.extend(("", f"Kapasite uyarısı: {plan.capacity_warning}"))
         lines.extend(("", "Bu plan ancak onayından sonra aktif taahhüt sayılacak."))
         return "\n".join(lines)[:4096]
+
+    @staticmethod
+    def _format_empty_plan(plan: DailyPlan) -> str:
+        return (
+            f"BUGÜN İÇİN TAAHHÜT BULUNAMADI — {plan.plan_date}\n\n"
+            "Notion'da Window tarihi bugün olan ve Status değeri Archived olmayan bir görev "
+            "bulunamadı. Görevlerini ekledikten sonra Daily Notion plan akışını yeniden "
+            "çalıştır; boş plan için onay vermen gerekmiyor."
+        )
 
     def _scheduled_start(self, item: DailyPlanItem) -> datetime | None:
         scheduled_start = item.scheduled_start

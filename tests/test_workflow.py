@@ -102,6 +102,27 @@ async def test_daily_plan_is_persisted_queued_and_idempotent(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_empty_daily_plan_is_explained_without_approval_buttons(tmp_path: Path) -> None:
+    async with build_runtime(tmp_path, tasks=[]) as runtime:
+        result = await runtime.engine.process(
+            make_event(
+                event_id="empty-plan-2026-08-25",
+                event_type=InboundEventType.DAILY_PLAN_REQUESTED,
+                source=EventSource.SCHEDULER,
+                payload={"plan_date": "2026-08-25"},
+            )
+        )
+
+        assert result.status == "plan_empty"
+        assert result.queued_messages == 1
+        message = (await runtime.outbox.pending())[0][1]
+        assert "BUGÜN İÇİN TAAHHÜT BULUNAMADI — 2026-08-25" in message.text
+        assert "boş plan için onay vermen gerekmiyor" in message.text
+        assert message.buttons == []
+        assert await runtime.plans.approved_plan("owner", date(2026, 8, 25)) is None
+
+
+@pytest.mark.asyncio
 async def test_same_day_plan_refresh_gets_a_new_content_bound_approval_token(
     tmp_path: Path,
 ) -> None:
@@ -225,6 +246,8 @@ async def test_monitor_controls_every_scheduled_task_and_closes_the_day(tmp_path
             )
         )
         plan_message = (await runtime.outbox.pending())[0][1]
+        assert "İlk entegrasyonu doğrula [Core/P1 · 12:00 · 30 dk]" in plan_message.text
+        assert "İkinci entegrasyonu doğrula [Core/P1 · 13:00 · 30 dk]" in plan_message.text
         token = plan_message.buttons[0][0].callback_data.rsplit(":", maxsplit=1)[1]
         approval = await runtime.engine.process(
             make_event(
