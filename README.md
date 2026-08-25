@@ -1,183 +1,262 @@
 # Neuro-Cognitive Alignment Engine
 
-A stateful, evidence-aware intent-action alignment system built with LangGraph, FastAPI,
-PostgreSQL/pgvector, Notion, Telegram, and optional Groq/OpenAI LLM providers.
+[![CI](https://github.com/gullcan/neuro-cognitive-alignment-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/gullcan/neuro-cognitive-alignment-engine/actions/workflows/ci.yml)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![LangGraph](https://img.shields.io/badge/Orchestration-LangGraph-1C3C3C)](https://github.com/langchain-ai/langgraph)
+[![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![PostgreSQL](https://img.shields.io/badge/Memory-PostgreSQL%20%2B%20pgvector-4169E1?logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
 
-## Project Vision
+A production-deployed, stateful multi-agent system that turns a dynamic Notion schedule
+into an approved daily plan, monitors execution through Telegram, and generates bounded,
+context-aware coaching with an LLM.
 
-This project is designed to analyze the gap between planned commitments and observed actions. It retrieves relevant behavioral history, identifies recurring patterns, and produces direct but evidence-bounded behavioral feedback.
+This is not a generic reminder bot. The engineering problem is intent–action alignment:
+preserve a user's plan as durable state, observe only reported actions, retrieve relevant
+behavioral context, and provide a useful next step without inventing psychological or
+neurological facts.
 
-The system is not a generic reminder bot and does not provide medical diagnosis or claim to measure neurological activity.
+- **Live API health:** [neuro-cognitive-alignment-engine.onrender.com/health/live](https://neuro-cognitive-alignment-engine.onrender.com/health/live)
+- **Architecture deep dive:** [docs/architecture.md](docs/architecture.md)
+- **Technology and interview guide (Turkish):**
+  [docs/technology-and-interview-guide.tr.md](docs/technology-and-interview-guide.tr.md)
+- **Render + Neon deployment:** [docs/deployment/render.md](docs/deployment/render.md)
 
-## Core Capabilities
+## What it does
 
-- Read daily commitments dynamically from Notion
-- Open each approved commitment at its scheduled time and monitor its outcome
-- Receive check-ins and task actions through Telegram
-- Understand free-form Turkish messages against the active plan
-- Orchestrate stateful workflows with LangGraph
-- Persist behavioral events and graph checkpoints
-- Retrieve semantically similar behavioral episodes
-- Generate evidence-grounded neuro-behavioral feedback
-- Produce weekly word-action consistency reviews
-- Support human-in-the-loop approvals
+1. Reads the day's tasks from a structured Notion data source.
+2. Builds an ordered plan and sends it to Telegram for human approval.
+3. Re-syncs Notion every 15 minutes without resetting an unchanged approved plan.
+4. Opens tasks at their scheduled time and follows up on missing starts, progress, and
+   obstacles.
+5. Accepts both inline buttons and free-form Turkish messages.
+6. Records explicit self-reports such as started, completed, blocked, skipped, or
+   rescheduled.
+7. Retrieves task history and similar behavioral episodes before producing feedback.
+8. Uses a deterministic Safety Critic and a local fallback around probabilistic LLM output.
 
-## Architecture
+Example interaction:
 
-- Python 3.12
-- FastAPI
-- LangGraph
-- PostgreSQL
-- Neon PostgreSQL with pgvector
-- Notion API
-- Telegram Bot API
-- Groq or OpenAI Responses API with structured outputs
+```text
+User: Bugün çalışmak istemiyorum.
 
-## Development Status
+Agent: Şu an istememen, sıradaki iş için karar veremeyeceğin anlamına gelmiyor.
+       Yalnızca ilk adımı beş dakika uygula; sürenin sonunda devam edip etmeyeceğine
+       yeniden sen karar ver.
 
-The operational database, FastAPI runtime, stateful LangGraph workflow, authenticated
-Telegram ingress, scheduler trigger, and leased outbox delivery are implemented.
+User: Bu görevi bitirdim.
 
-## LangGraph Runtime
+Agent: Bu işi kapattın; bugün kendine verdiğin sözü davranışa çevirdin.
+       Başlamanı kolaylaştıran şeyi bir cümleyle not et, sonra sıradaki işe geç.
+```
 
-The graph uses deterministic routing for control flow and reserves the language model for
-planning and evidence-bounded feedback generation. Its current branches are:
+Reluctance is not silently recorded as failure. A task status changes only when the user
+reports an explicit action with sufficient confidence and the selected task belongs to
+today's approved plan.
+
+## System architecture
+
+```mermaid
+flowchart LR
+    N[Notion data source] -->|dynamic daily tasks| API[FastAPI]
+    T[Telegram webhook] -->|messages and callbacks| API
+    GH[GitHub Actions] -->|scheduled authenticated triggers| API
+
+    API --> G[LangGraph orchestrator]
+    G --> P[Planner Agent]
+    G --> M[Monitor Agent]
+    G --> C[Conversation Agent]
+    G --> B[Neuro-Behavioral Agent]
+    B --> S[Safety Critic]
+
+    P --> DB[(PostgreSQL / JSONB)]
+    M --> DB
+    C --> DB
+    B --> V[(pgvector behavioral memory)]
+    G --> CP[(LangGraph checkpoints)]
+    G --> O[(Durable outbox)]
+    O --> T
+
+    C -. structured output .-> LLM[Groq / OpenAI]
+    B -. structured output .-> LLM
+    P -. structured output .-> LLM
+    LLM -. failure .-> F[Rule-based fallback]
+```
+
+The graph owns control flow; the LLM does not own scheduling, authorization, database
+writes, callback routing, or delivery retries.
+
+## Agent responsibilities
+
+| Agent | Input | Responsibility | Output |
+|---|---|---|---|
+| Planner Agent | Today's Notion tasks | Orders tasks and creates a bounded daily plan | `DailyPlan` |
+| Monitor Agent | Approved plan, time, recorded actions | Emits due/start/progress/evening controls | Outbox messages |
+| Conversation Agent | Free text, focused task, plan activity, evidence | Interprets explicit self-reports and writes a natural reply | `ConversationDecision` |
+| Neuro-Behavioral Agent | Task action, counts, similar episodes | Produces evidence-grounded behavioral feedback | `NeuroFeedback` |
+| Safety Critic | Structured feedback and evidence | Rejects unsupported biological, clinical, shaming, or dependency claims | approve / retry / fail closed |
+
+These are specialized graph nodes with explicit contracts—not five autonomous bots
+chatting without control. That distinction keeps the system testable and auditable.
+
+## LangGraph state and routes
+
+Every inbound event is normalized into a shared typed state. The claim node first enforces
+idempotency, then routes the event:
 
 ```text
 claim inbound event
-├── daily plan -> Notion -> Planner Agent -> persist plan -> Telegram outbox
-├── task monitor -> approved plan + observed task events
-│                   -> due/start/progress/evening controls -> Telegram outbox
-├── plan decision -> approve/reject persisted plan -> Telegram outbox
-├── task behavior -> record event + vector memory -> retrieve similar evidence
-│                    -> Neuro-Behavioral Agent
-│                    -> Safety Critic -> Telegram outbox
-└── free-form message -> approved plan + current task activity + bounded evidence
-                         -> Conversation Agent -> optional task action -> Telegram outbox
+├── daily plan
+│   └── Notion -> Planner -> content-aware persistence -> approval message
+├── task monitor
+│   └── approved plan + task activity -> scheduled controls
+├── plan decision
+│   └── approve/reject -> persist decision -> task controls
+├── task behavior
+│   └── event + memory -> evidence retrieval -> feedback -> Safety Critic
+└── free-form Telegram message
+    └── plan + focus + evidence -> Conversation Agent -> optional task action
 ```
 
-Every branch finishes by marking the inbound event complete. Repeated source events are
-stopped at the claim node, making downstream writes idempotent. The Safety Critic permits
-one model revision and fails closed if unsupported biological or clinical claims remain.
+Graph checkpoints persist execution state and recovery history. Operational event tables
+remain the source of truth for user actions. Behavioral vector memory is a separate
+retrieval concern.
 
-LangGraph checkpoints and behavioral memory serve different purposes:
+## Reliability and safety decisions
 
-- Checkpoints persist graph execution state and recovery history per `thread_id`.
-- Operational events persist observed behavior used to construct evidence.
-- Behavioral long-term memory retrieves similar episodes across tasks and threads using
-  explainable context vectors. These encode observable planning factors rather than
-  claiming language-level semantic or neurological measurement.
+- **Idempotent ingress:** Telegram update IDs and scheduler request IDs are claimed once.
+- **Content-addressed plans:** unchanged polling preserves approval and sends no duplicate.
+- **Human-in-the-loop:** a new or edited plan remains pending until Telegram approval.
+- **Durable outbox:** messages are persisted, leased, retried, and dead-lettered before
+  transport concerns can affect graph control flow.
+- **At-least-once delivery:** retry leases and dead-letter state handle transient failures.
+- **Typed LLM output:** Pydantic schemas constrain plans, feedback, and conversation intent.
+- **LLM fallback:** Groq/OpenAI failures fall back to deterministic local behavior.
+- **Bounded memory:** 32-dimensional observable planning-context vectors; no claim of
+  measuring mental states.
+- **Safety boundary:** no diagnosis, dopamine measurement, guaranteed transformation,
+  shame, coercion, or assistant-dependency language.
+- **Secret boundaries:** Telegram webhook secret, internal scheduler key, database URL, and
+  LLM keys remain environment variables.
 
-Checkpoint backends are selected with `CHECKPOINT_BACKEND`: `memory` for tests, `sqlite`
-for local experiments, and `postgres` for the durable runtime. PostgreSQL checkpoint tables
-are managed by LangGraph and intentionally remain outside Alembic's operational schema.
+## Technology stack
 
-## LLM guidance
+| Layer | Technology | Purpose |
+|---|---|---|
+| Language/runtime | Python 3.12, uv | Typed async application and reproducible dependency lock |
+| API | FastAPI, Uvicorn, Pydantic | Webhooks, internal scheduler endpoints, validation |
+| Orchestration | LangGraph | Stateful routing, retries, checkpoints, specialized agents |
+| Integrations | Notion API, Telegram Bot API, HTTPX | Dynamic tasks and user interaction |
+| LLM | Groq or OpenAI Responses API | Structured planning and personalized guidance |
+| Persistence | PostgreSQL, SQLAlchemy async, JSONB | Plans, events, inbox, outbox |
+| Retrieval memory | pgvector, HNSW cosine index | Similar behavioral context lookup |
+| Schema management | Alembic | Versioned, reviewable database migrations |
+| Delivery reliability | Durable leased outbox | Retryable Telegram delivery |
+| Deployment | Docker, Render, Neon | Zero-cost public API and durable managed PostgreSQL |
+| Scheduling/CI | GitHub Actions | Daily planning, 15-minute monitoring, quality gates |
+| Quality | Ruff, strict mypy, pytest | Formatting, linting, type safety, behavioral tests |
+| Observability | structlog, health/readiness probes | Structured events and platform diagnostics |
 
-The runtime selects Groq when `GROQ_API_KEY` is configured, otherwise OpenAI when
-`OPENAI_API_KEY` is configured, and finally the deterministic local provider. External
-providers are wrapped by a resilient fallback: timeouts, malformed responses, and
-free-tier rate limits are logged without secrets, then the same request is completed by the
-local provider. The LLM receives the current task event and retrieved behavioral evidence;
-it never controls scheduling, database writes, Telegram callbacks, or the Safety Critic.
+The detailed purpose and interview explanation for every technology is available in the
+[Turkish study guide](docs/technology-and-interview-guide.tr.md).
 
-The zero-cost deployment uses Groq's OpenAI-compatible Responses API with
-`GROQ_MODEL=openai/gpt-oss-20b`. Store `GROQ_API_KEY` only in Render's Environment page.
-Task titles and the bounded behavioral context required to write feedback are sent to the
-selected LLM provider; API keys and infrastructure secrets are never included in prompts.
+## Data model
 
-Free-form Telegram text is interpreted as a structured `ConversationDecision`. Explicit
-self-reports such as starting, completing, being blocked, skipping, or rescheduling can
-update the focused task. Reluctance such as “yapmak istemiyorum” remains a feeling and
-receives a small-start strategy; it is never silently converted into a skipped task.
-Actions below the confidence threshold, references outside today's approved plan, and
-ambiguous task references are not persisted.
+The application owns five operational tables:
 
-## Database migrations
+- `inbound_events`: inbox/claim ledger for idempotent external events.
+- `domain_events`: append-only observed plan and task actions.
+- `daily_plans`: one content-versioned plan per user/date with approval status.
+- `outbox`: leased Telegram messages with retry and dead-letter state.
+- `behavioral_memories`: task episodes, observable context, and pgvector embedding.
 
-Operational PostgreSQL schemas are managed with Alembic:
+LangGraph checkpoint tables are created by LangGraph and intentionally remain outside the
+Alembic-owned operational schema.
+
+## Notion contract
+
+The configured data source must expose these properties:
+
+| Property | Type | Required |
+|---|---|---|
+| Task | Title | yes |
+| Window | Date with start time | yes |
+| Status | Status | yes |
+| Commitment Tier | Select | yes |
+| Priority | Select | yes |
+| Definition of Done | Rich text | yes |
+| Minimum Action | Rich text | yes |
+| Estimated Minutes | Number | optional |
+| Cognitive Load | Number (1–5) | optional |
+| Context Cue | Select or rich text | optional |
+| Evidence Required | Checkbox | optional |
+| Evidence | URL | optional |
+
+Only tasks matching the requested date and not marked `Archived` are imported.
+
+## Run locally
+
+Requirements: Docker and uv.
 
 ```bash
-uv run alembic upgrade head
-uv run alembic check
-```
-
-See [`migrations/README`](migrations/README) for revision, rollback, SQLite testing, and
-existing-database baseline guidance.
-
-## Local API
-
-Start PostgreSQL, apply migrations, and run the API:
-
-```bash
+cp .env.example .env
 docker compose up -d postgres
+uv sync --extra dev
 uv run alembic upgrade head
 uv run neuro-alignment
 ```
 
-The interactive OpenAPI interface is available at `http://localhost:8000/docs`.
-Deployment probes use separate endpoints:
+Then open:
 
-- `GET /health/live` checks that the API process is running.
-- `GET /health/ready` verifies both graph initialization and database connectivity.
+- OpenAPI: `http://localhost:8000/docs`
+- Liveness: `http://localhost:8000/health/live`
+- Readiness: `http://localhost:8000/health/ready`
 
-Runtime entry points are deliberately separated by trust boundary:
+Do not commit `.env`. Add Notion, Telegram, and Groq/OpenAI credentials only through local
+environment variables or the deployment platform's secret UI.
 
-- `POST /v1/webhooks/telegram` requires Telegram's
-  `X-Telegram-Bot-Api-Secret-Token` header and validates the configured chat.
-- `POST /v1/internal/scheduler/daily-plan` requires `X-Internal-Api-Key` and creates
-  an idempotent daily planning event.
-- `POST /v1/internal/scheduler/task-monitor` requires `X-Internal-Api-Key` and evaluates
-  the approved plan against the current time and recorded task actions.
-- `POST /v1/internal/outbox/deliver` requires `X-Internal-Api-Key` and delivers one
-  leased Telegram batch.
+## Quality gates
 
-The repository also includes zero-cost GitHub Actions schedules. Daily planning runs at
-07:35 in `Europe/Istanbul`; every 15-minute task-monitor cycle first refreshes today's
-Notion data and then evaluates the approved plan. An unchanged refresh stays silent and
-preserves the existing approval. New or edited tasks create exactly one updated plan that
-must be approved in Telegram before its reminder schedule becomes active.
-The monitor sends a due reminder, a missing-start check after the configured grace period,
-a progress check after the task's estimated duration, an obstacle follow-up, and evening
-completion summaries. Persistent outbox keys make every control idempotent. Configure the
-repository secret `RENDER_INTERNAL_API_KEY` with the same value as Render's
-`INTERNAL_API_KEY`; the secret is never stored in either workflow file.
+```bash
+uv lock --check
+uv run ruff format --check src tests migrations
+uv run ruff check src tests migrations
+uv run mypy src
+uv run pytest
+uv run alembic check
+```
 
-For time-aware monitoring, every Notion `Window` must include both a date and a start time.
-Tasks with only a date are exposed immediately after plan approval because no exact trigger
-time exists. Tasks added after the 07:35 import are discovered by the next 15-minute cycle;
-approve the single updated Telegram plan to activate their reminder schedule. The
-content-derived approval token isolates each real plan revision and prevents unchanged
-polls from sending duplicate messages.
+The CI workflow runs the lock, format, lint, type, and test checks on every push and pull
+request to `main`.
 
-The engine observes Telegram button reports and persisted system events. It cannot directly
-detect whether the user physically started work, so an unanswered reminder is treated as
-"no behavior evidence yet," never as proof that the task was ignored.
+## Deployment
 
-When Telegram delivery is enabled, workflow requests attempt an outbox delivery after
-processing. Failed records are retried up to `OUTBOX_MAX_ATTEMPTS`, and then moved to the
-`dead` state. PostgreSQL workers use row locking with `SKIP LOCKED`; a delivery lease also
-recovers records left in `sending` by a stopped worker. Telegram does not expose a message
-idempotency key, so delivery is intentionally at-least-once across a crash exactly between
-the provider accepting a message and the local sent marker being committed.
+The portfolio deployment uses:
 
-## Production deployment
+- Render Free Docker web service for HTTPS webhooks and API execution.
+- Neon Free PostgreSQL with pgvector for durable data and checkpoints.
+- GitHub Actions for the 07:35 daily plan and 15-minute Notion sync/monitor cycle.
 
-The repository includes a zero-cost portfolio Blueprint using a Render Free Docker web
-service and Neon Free PostgreSQL. The database persists operational events and durable
-LangGraph checkpoints outside Render's ephemeral filesystem. Because free Render services
-do not support pre-deploy commands, the single-instance container applies idempotent
-Alembic migrations before starting the API.
+The container runs Alembic before replacing itself with Uvicorn. Render and Neon free tiers
+can cold-start, so reminder delivery is approximate rather than SLA-backed. Persistent
+idempotency prevents retries from creating duplicate logical controls.
 
-See [`docs/deployment/render.md`](docs/deployment/render.md) for the dashboard flow,
-free-tier constraints, secret-handling boundary, and Telegram activation gate.
+See the complete procedure in [docs/deployment/render.md](docs/deployment/render.md).
 
-## Safety Boundary
+## Honest limitations
 
-Behavioral observations, user reports, statistical patterns, model hypotheses, and general neuroscience explanations are treated as separate evidence levels. Model-generated hypotheses must never be stored or presented as measured biological facts.
+- Single-user authorization model; this is not yet a multi-tenant SaaS.
+- Telegram and Notion self-reports are observations; the system cannot verify physical work.
+- Free hosting and LLM tiers have cold starts, quotas, and no production SLA.
+- Vector retrieval uses engineered planning-context features rather than a learned semantic
+  embedding model.
+- Telegram delivery is at-least-once at the provider boundary.
+- No clinical or neuroscientific outcome is measured.
 
-The engine retains that structured evidence and safety review internally. Telegram receives
-only a short, single-paragraph projection: the current word-action gap, one immediately
-executable step, and one evidence request. The message supports autonomy and ties confidence
-to the user's observable actions; it does not promise dopamine changes, use covert
-manipulation, or cultivate dependence on the assistant's approval.
+These are explicit architectural boundaries, not hidden assumptions.
+
+## Documentation
+
+- [Architecture and engineering decisions](docs/architecture.md)
+- [Technology and interview guide — Turkish](docs/technology-and-interview-guide.tr.md)
+- [Render + Neon deployment](docs/deployment/render.md)
+- [Database migration operations](migrations/README)

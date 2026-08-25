@@ -49,11 +49,13 @@ Render form asks for the database URL only once.
 1. Sign in to Render and open **New > Blueprint**.
 2. Select `gullcan/neuro-cognitive-alignment-engine`.
 3. Confirm that the web service plan is **Free** and that no Render database is listed.
-4. Supply the five prompted values:
+4. Supply the seven prompted values:
    - `DATABASE_URL`: the direct Neon connection string;
+   - `NOTION_API_TOKEN`: the secret from the Notion connection;
+   - `NOTION_DATA_SOURCE_ID`: the ID of the commitments data source;
    - `TELEGRAM_BOT_TOKEN`: from the local `.env` file;
    - `TELEGRAM_WEBHOOK_SECRET`: from the local `.env` file;
-   - `TELEGRAM_CHAT_ID`: from the local `.env` file.
+   - `TELEGRAM_CHAT_ID`: from the local `.env` file;
    - `GROQ_API_KEY`: a Groq Cloud free-tier API key used only for LLM-written guidance.
 5. Apply the Blueprint and wait for the deploy to finish.
 6. Open the service URL ending in `/health/ready`. Continue only when it returns
@@ -83,7 +85,7 @@ dropping the Telegram interaction.
 An OpenAI key remains an optional alternative. Provider credentials stay outside Git and
 are read only from Render environment variables.
 
-After Notion is configured, enable both repository workflows. They reuse the existing
+After deployment, enable both repository workflows. They reuse the existing
 `RENDER_INTERNAL_API_KEY` secret: **Daily Notion plan** imports the day at 07:35 Istanbul
 time and **Notion task monitor** checks the approved plan every 15 minutes. No additional
 Render worker or paid cron service is required.

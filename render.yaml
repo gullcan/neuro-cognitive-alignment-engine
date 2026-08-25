@@ -26,6 +26,12 @@ services:
         sync: false
       - key: CHECKPOINT_BACKEND
         value: postgres
+      - key: NOTION_API_TOKEN
+        sync: false
+      - key: NOTION_DATA_SOURCE_ID
+        sync: false
+      - key: NOTION_API_VERSION
+        value: "2026-03-11"
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET

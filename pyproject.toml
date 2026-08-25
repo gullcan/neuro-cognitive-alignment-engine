@@ -1,9 +1,18 @@
 [project]
 name = "neuro-cognitive-alignment-engine"
 version = "0.1.0"
-description = "A stateful, evidence-aware intent-action alignment engine built with LangGraph."
+description = "A stateful LangGraph multi-agent system for Notion planning and Telegram coaching."
 readme = "README.md"
 requires-python = ">=3.12"
+keywords = [
+    "agentic-ai",
+    "fastapi",
+    "langgraph",
+    "multi-agent",
+    "notion",
+    "pgvector",
+    "telegram-bot",
+]
 dependencies = [
     "aiosqlite>=0.21,<1",
     "alembic>=1.18,<2",
@@ -35,6 +44,10 @@ dev = [
 [project.scripts]
 neuro-alignment = "neuro_alignment.api:run"
 neuro-alignment-start = "neuro_alignment.deployment:start"
+
+[project.urls]
+Documentation = "https://github.com/gullcan/neuro-cognitive-alignment-engine/tree/main/docs"
+Repository = "https://github.com/gullcan/neuro-cognitive-alignment-engine"
 
 [build-system]
 requires = ["hatchling"]
